@@ -134,10 +134,10 @@ jobs:
           function Assert-Settings([string]$when) {
             if (-not (Test-Path -LiteralPath $settings)) { throw "settings.json missing $when" }
             $got = Get-Content -LiteralPath $settings -Raw -Encoding utf8 | ConvertFrom-Json
-            if ($got.mode -ne 'dark') { throw "mode not preserved $when: $($got.mode)" }
-            if ([math]::Abs([double]$got.opacity - 0.6) -gt 1e-6) { throw "opacity not preserved $when: $($got.opacity)" }
-            if ([math]::Abs([double]$got.highlight - 0.82) -gt 1e-6) { throw "highlight not preserved $when: $($got.highlight)" }
-            if ([math]::Abs([double]$got.scale - 1.1) -gt 1e-6) { throw "scale not preserved $when: $($got.scale)" }
+            if ($got.mode -ne 'dark') { throw "mode not preserved ${when}: $($got.mode)" }
+            if ([math]::Abs([double]$got.opacity - 0.6) -gt 1e-6) { throw "opacity not preserved ${when}: $($got.opacity)" }
+            if ([math]::Abs([double]$got.highlight - 0.82) -gt 1e-6) { throw "highlight not preserved ${when}: $($got.highlight)" }
+            if ([math]::Abs([double]$got.scale - 1.1) -gt 1e-6) { throw "scale not preserved ${when}: $($got.scale)" }
           }
           Assert-Settings 'after writing preview.3 settings'
           Write-Host "Installing new Setup over preview.3: $setup"
