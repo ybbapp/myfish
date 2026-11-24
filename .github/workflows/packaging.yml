@@ -28,13 +28,15 @@ jobs:
       - name: Strict-verify bundle signatures
         run: |
           set -euo pipefail
-          mapfile -t apps < <(find dist/macos -name '*.app' -type d)
-          if [ "${#apps[@]}" -lt 1 ]; then
+          # macos-latest ships Bash 3.2, which has no mapfile.
+          find dist/macos -print
+          find dist/macos -name '*.app' -type d > /tmp/myfish-apps.txt
+          if [ ! -s /tmp/myfish-apps.txt ]; then
             echo "no .app bundles found" >&2
-            find dist/macos -print >&2
             exit 1
           fi
-          for app in "${apps[@]}"; do
+          while IFS= read -r app; do
+            [ -z "$app" ] && continue
             echo "::group::codesign $app"
             if [ ! -f "$app/Contents/_CodeSignature/CodeResources" ]; then
               echo "missing CodeResources in $app" >&2
@@ -54,7 +56,7 @@ jobs:
               fi
             fi
             echo "::endgroup::"
-          done
+          done < /tmp/myfish-apps.txt
       - name: Upload macOS packages
         uses: actions/upload-artifact@v4
         with:
@@ -89,9 +91,14 @@ jobs:
           if (-not $amd) { throw 'missing myfish-setup-0.1.0-amd64.exe' }
           if (-not $arm) { throw 'missing myfish-setup-0.1.0-arm64.exe' }
           # Real NSIS installer, not a renamed zip.
-          $bytes = [System.IO.File]::ReadAllBytes($amd.FullName)
-          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes[0..Math.Min(4096, $bytes.Length-1)])
-          if ($ascii -notmatch 'Nullsoft') { throw "amd64 setup does not look like NSIS: $($amd.FullName)" }
+          function Assert-NsisInstaller([string]$path) {
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            $end = [Math]::Min(4095, $bytes.Length - 1)
+            $ascii = [System.Text.Encoding]::ASCII.GetString($bytes[0..$end])
+            if ($ascii -notmatch 'Nullsoft') { throw "setup does not look like NSIS: $path" }
+          }
+          Assert-NsisInstaller $amd.FullName
+          Assert-NsisInstaller $arm.FullName
           Write-Host "amd64=$($amd.FullName) size=$($amd.Length)"
           Write-Host "arm64=$($arm.FullName) size=$($arm.Length)"
           "SETUP_AMD64=$($amd.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
