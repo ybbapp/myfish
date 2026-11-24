@@ -42,72 +42,80 @@ const (
 	handleFontSize = 13
 )
 
-func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool, g GlassStyle) {
-	gx, gy, gw, gh, t := float32(pan.GX), float32(pan.GY), float32(pan.GW), float32(pan.GH), float32(pan.Thickness)
+func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool, g GlassStyle, scale float64) {
+	s := func(v float64) float32 { return float32(v * clampScale(scale)) }
+	sw := func(v float64) float32 {
+		out := float32(v * clampScale(scale))
+		if out < 0.6 {
+			return 0.6
+		}
+		return out
+	}
+	gx, gy, gw, gh, th := s(pan.GX), s(pan.GY), s(pan.GW), s(pan.GH), s(pan.Thickness)
 
-	bx, by, bw, bh := float32(pan.BX), float32(pan.BY), float32(pan.BW), float32(pan.BH)
-	legH, legW := float32(pan.LegH), float32(pan.LegW)
-	p.Fill(ui.Rect{X: bx + 8, Y: by + bh + legH - 3, W: bw - 16, H: 6}, colorStandShadow, 5)
+	bx, by, bw, bh := s(pan.BX), s(pan.BY), s(pan.BW), s(pan.BH)
+	legH, legW := s(pan.LegH), s(pan.LegW)
+	p.Fill(ui.Rect{X: bx + s(8), Y: by + bh + legH - s(3), W: bw - s(16), H: s(6)}, colorStandShadow, sw(5))
 
 	leg := func(x float32) {
 		r := ui.Rect{X: x, Y: by + bh, W: legW, H: legH}
-		p.Fill(r, colorStand, 2)
-		p.Fill(ui.Rect{X: x + legW - 4, Y: by + bh, W: 4, H: legH}, colorStandDark, 1)
-		p.Stroke(r, colorStandDark, 2, 1)
+		p.Fill(r, colorStand, sw(2))
+		p.Fill(ui.Rect{X: x + legW - s(4), Y: by + bh, W: s(4), H: legH}, colorStandDark, sw(1))
+		p.Stroke(r, colorStandDark, sw(2), sw(1))
 	}
-	leg(float32(pan.Leg1X))
-	leg(float32(pan.Leg2X))
+	leg(s(pan.Leg1X))
+	leg(s(pan.Leg2X))
 
 	plat := ui.Rect{X: bx, Y: by, W: bw, H: bh}
-	p.Fill(plat, colorStand, 4)
+	p.Fill(plat, colorStand, sw(4))
 	hiH := bh * 0.28
-	if hiH < 5 {
-		hiH = 5
+	if hiH < s(5) {
+		hiH = s(5)
 	}
-	p.Fill(ui.Rect{X: bx, Y: by, W: bw, H: hiH}, colorStandLight, 4)
-	p.Fill(ui.Rect{X: bx + bw - 5, Y: by + hiH*0.6, W: 5, H: bh - hiH*0.6}, colorStandDark, 2)
-	p.Stroke(plat, colorStandDark, 4, 1)
-	slotW := gw + t*0.4
+	p.Fill(ui.Rect{X: bx, Y: by, W: bw, H: hiH}, colorStandLight, sw(4))
+	p.Fill(ui.Rect{X: bx + bw - s(5), Y: by + hiH*0.6, W: s(5), H: bh - hiH*0.6}, colorStandDark, sw(2))
+	p.Stroke(plat, colorStandDark, sw(4), sw(1))
+	slotW := gw + th*0.4
 	slotX := gx - (slotW-gw)/2
-	p.Fill(ui.Rect{X: slotX, Y: by + 2, W: slotW, H: 3}, colorStandDark, 1)
+	p.Fill(ui.Rect{X: slotX, Y: by + s(2), W: slotW, H: s(3)}, colorStandDark, sw(1))
 
 	// Subtle hairline just above the plate marks the click-to-feed strip.
 	line := colorFeedLine
 	if feedHot {
 		line = colorFeedLineHot
 	}
-	p.Stroke(ui.Rect{X: float32(pan.FX) + 8, Y: float32(pan.FY+pan.FH) - 3, W: float32(pan.FW) - 16, H: 1}, line, 0.5, 1)
+	p.Stroke(ui.Rect{X: s(pan.FX) + s(8), Y: s(pan.FY+pan.FH) - s(3), W: s(pan.FW) - s(16), H: s(1)}, line, sw(0.5), sw(1))
 
 	top := &ui.Path{}
 	top.MoveTo(gx, gy)
-	top.LineTo(gx+t*0.45, gy-t*0.38)
-	top.LineTo(gx+gw+t, gy-t*0.38)
+	top.LineTo(gx+th*0.45, gy-th*0.38)
+	top.LineTo(gx+gw+th, gy-th*0.38)
 	top.LineTo(gx+gw, gy)
 	top.Close()
 	p.FillPath(top, g.Top)
-	p.StrokePath(top, 1, g.Edge)
+	p.StrokePath(top, sw(1), g.Edge)
 
 	side := &ui.Path{}
 	side.MoveTo(gx+gw, gy)
-	side.LineTo(gx+gw+t, gy-t*0.38)
-	side.LineTo(gx+gw+t, gy+gh-t*0.2)
+	side.LineTo(gx+gw+th, gy-th*0.38)
+	side.LineTo(gx+gw+th, gy+gh-th*0.2)
 	side.LineTo(gx+gw, gy+gh)
 	side.Close()
 	p.FillPath(side, g.Side)
-	p.StrokePath(side, 1, g.Edge)
+	p.StrokePath(side, sw(1), g.Edge)
 
 	// FillA 0 keeps the plate truly clear so the desktop shows through.
 	front := ui.Rect{X: gx, Y: gy, W: gw, H: gh}
 	if g.FillA > 0.001 {
-		p.Fill(front, g.Fill, 2)
+		p.Fill(front, g.Fill, sw(2))
 	}
-	p.Stroke(front, g.Edge, 2, 1.25)
+	p.Stroke(front, g.Edge, sw(2), sw(1.25))
 
 	hi := &ui.Path{}
-	hi.MoveTo(gx+2.5, gy+gh-4)
-	hi.LineTo(gx+2.5, gy+2.5)
-	hi.LineTo(gx+gw-4, gy+2.5)
-	p.StrokePath(hi.Cap(ui.ButtCap), 1.35, g.Hi)
+	hi.MoveTo(gx+s(2.5), gy+gh-s(4))
+	hi.LineTo(gx+s(2.5), gy+s(2.5))
+	hi.LineTo(gx+gw-s(4), gy+s(2.5))
+	p.StrokePath(hi.Cap(ui.ButtCap), sw(1.35), g.Hi)
 }
 
 func withAlpha(c ui.Color, a float64) ui.Color {
@@ -122,9 +130,13 @@ func withAlpha(c ui.Color, a float64) ui.Color {
 	return c
 }
 
-func glowText(c *ui.Context, s, key string, size float32, fill, glow ui.Color, x, y float64) {
+func glowText(c *ui.Context, s, key string, size float32, fill, glow ui.Color, x, y, scale float64) {
+	stroke := 1.15 * clampScale(scale)
+	if stroke < 0.7 {
+		stroke = 0.7
+	}
 	ui.Text(c, s).Key(key).
-		Font("monospace").FontSize(size).Bold().
-		TextColor(fill).TextStroke(1.15, glow).
-		Absolute().Left(float32(x)).Top(float32(y))
+		Font("monospace").FontSize(scaledFontSize(float64(size), scale)).Bold().
+		TextColor(fill).TextStroke(float32(stroke), glow).
+		Absolute().Left(float32(x * clampScale(scale))).Top(float32(y * clampScale(scale)))
 }

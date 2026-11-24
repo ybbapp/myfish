@@ -28,11 +28,12 @@ type Settings struct {
 	Mode      GlassMode `json:"mode"`
 	Opacity   float64   `json:"opacity"`   // 0–1 fill alpha; 0 is no fill
 	Highlight float64   `json:"highlight"` // 0–1 edge highlight strength
+	Scale     float64   `json:"scale"`     // 1.0 = original 420×520; default is smaller
 }
 
 // DefaultSettings is true transparency with a moderate edge highlight.
 func DefaultSettings() Settings {
-	return Settings{Mode: GlassClear, Opacity: 0, Highlight: 0.70}
+	return Settings{Mode: GlassClear, Opacity: 0, Highlight: 0.70, Scale: defaultScale}
 }
 
 func (s *Settings) Clamp() {
@@ -48,6 +49,7 @@ func (s *Settings) Clamp() {
 	if s.Highlight > 1 {
 		s.Highlight = 1
 	}
+	s.Scale = clampScale(s.Scale)
 	switch s.Mode {
 	case GlassClear, GlassLight, GlassDark, GlassAuto:
 	default:
@@ -149,4 +151,17 @@ func SaveSettings(path string, s Settings) error {
 
 func settingsPath(dir string) string {
 	return filepath.Join(dir, settingsFileName)
+}
+
+// ClampedScale is the persisted tank scale, or the default if unset.
+func (s Settings) ClampedScale() float64 {
+	s.Clamp()
+	return s.Scale
+}
+
+// RestoreDefaultScale returns the recommended smaller size, not the
+// original 420×520 preview size.
+func (s *Settings) RestoreDefaultScale() {
+	s.Scale = defaultScale
+	s.Clamp()
 }

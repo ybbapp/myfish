@@ -10,7 +10,7 @@ import (
 
 const (
 	settingsW     = 340
-	settingsH     = 400
+	settingsH     = 520
 	setLabel      = "SET"
 	settingsAccel = "CmdOrCtrl+Alt+G"
 )
@@ -56,6 +56,21 @@ func (a *app) settingsView(c *ui.Context) {
 		if a.settings.Mode == GlassAuto && !a.systemDarkOK {
 			note = "系统浅深主题此刻读不到，自动暂按浅色桌面（深色玻璃）处理。仍可用上面的手动预设。"
 		}
+		ui.Text(c, fmt.Sprintf("鱼缸大小  %d%%（100%% 为原先 420×520）", int(a.settings.Scale*100+0.5))).FontSize(13)
+		ui.Slider(c, &a.settings.Scale, minScale, maxScale).Label("tank-scale").Width(300)
+		if a.settings.Scale != a.lastScale {
+			a.settings.Clamp()
+			a.lastScale = a.settings.Scale
+			a.persistSettings()
+			a.applyTankScale()
+		}
+		if ui.Button(c, "恢复默认大小").Clicked() {
+			a.settings.RestoreDefaultScale()
+			a.lastScale = a.settings.Scale
+			a.persistSettings()
+			a.applyTankScale()
+		}
+
 		ui.Text(c, note).FontSize(11).TextColor(th.TextMuted)
 		if ui.Button(c, "关闭").Clicked() {
 			a.closeSettings()
@@ -67,6 +82,7 @@ func (a *app) openSettings() {
 	a.lastMode = a.settings.Mode
 	a.lastOpacity = a.settings.Opacity
 	a.lastHighlight = a.settings.Highlight
+	a.lastScale = a.settings.Scale
 	a.settingsOpen = true
 	if a.win == nil {
 		return
@@ -77,7 +93,7 @@ func (a *app) openSettings() {
 		return
 	}
 	a.setWin = mygo.NewWindow(mygo.WindowOptions{
-		Title:             "玻璃设置",
+		Title:             "设置",
 		Width:             settingsW,
 		Height:            settingsH,
 		DisableResize:     true,

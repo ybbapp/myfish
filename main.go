@@ -22,8 +22,6 @@ import (
 )
 
 const (
-	windowW   = 420
-	windowH   = 520
 	dragLabel = "DRAG"
 	feedLabel = "FEED"
 )
@@ -54,26 +52,27 @@ type app struct {
 	lastMode      GlassMode
 	lastOpacity   float64
 	lastHighlight float64
+	lastScale     float64
 	settingsOpen  bool
 }
 
 func newApp() *app {
 	s := DefaultSettings()
 	return &app{
-		tank:          tank.New(windowW, windowH, 7),
+		tank:          tank.New(designW, designH, 7),
 		alwaysOnTop:   true,
 		feeder:        tank.NewFeeder(),
 		settings:      s,
 		lastMode:      s.Mode,
 		lastOpacity:   s.Opacity,
 		lastHighlight: s.Highlight,
+		lastScale:     s.Scale,
 	}
 }
 
 func (a *app) view(c *ui.Context) {
 	now := c.Now()
-	w, h := c.Size()
-	a.tank.Resize(float64(w), float64(h))
+	scale := a.settings.ClampedScale()
 	if a.last.IsZero() {
 		a.last = now
 	}
@@ -101,7 +100,8 @@ func (a *app) view(c *ui.Context) {
 	feedHot := false
 	stage := ui.Box(c).Fill()
 	stage.HitTest(func(x, y float32, r ui.Rect) bool {
-		return pan.ContainsFrame(float64(x), float64(y))
+		dx, dy := windowToDesign(float64(x), float64(y), scale)
+		return pan.ContainsFrame(dx, dy)
 	})
 	stage.HandleInput(func(ev ui.InputEvent) bool {
 		if ev.Kind == ui.InputPointerDown {
@@ -114,31 +114,32 @@ func (a *app) view(c *ui.Context) {
 		// Hover tracking must not consume the event or it would swallow clicks.
 		return false
 	})
-	if a.ptrSeen && stage.Hovered() && pan.ContainsGlass(float64(a.ptrX), float64(a.ptrY)) {
-		a.tank.SetHover(float64(a.ptrX), float64(a.ptrY))
-	} else if a.tank.Hovering && !(stage.Hovered() && pan.ContainsGlass(float64(a.ptrX), float64(a.ptrY))) {
+	ptrDX, ptrDY := windowToDesign(float64(a.ptrX), float64(a.ptrY), scale)
+	if a.ptrSeen && stage.Hovered() && pan.ContainsGlass(ptrDX, ptrDY) {
+		a.tank.SetHover(ptrDX, ptrDY)
+	} else if a.tank.Hovering && !(stage.Hovered() && pan.ContainsGlass(ptrDX, ptrDY)) {
 		a.tank.ClearHover()
 	}
-	if a.ptrSeen && stage.Hovered() && pan.ContainsFeed(float64(a.ptrX), float64(a.ptrY)) {
+	if a.ptrSeen && stage.Hovered() && pan.ContainsFeed(ptrDX, ptrDY) {
 		feedHot = true
 	}
 	style := a.settings.Resolve(a.systemDark)
 	stage.Draw(func(p *ui.Painter, r ui.Rect) {
-		drawChassis(p, pan, feedHot, style)
+		drawChassis(p, pan, feedHot, style, scale)
 	})
 
 	for i, pl := range a.tank.Plants {
-		glowText(c, pl.Text, fmt.Sprintf("plant-%d", i), plantFontSize, colorPlant, colorPlantGlow, pl.X, pl.Y)
+		glowText(c, pl.Text, fmt.Sprintf("plant-%d", i), plantFontSize, colorPlant, colorPlantGlow, pl.X, pl.Y, scale)
 	}
 	for _, b := range a.tank.Bubbles {
-		glowText(c, b.Glyph, fmt.Sprintf("bubble-%d", b.ID), bubbleFontSize, colorBubble, colorBubbleGlow, b.X, b.Y)
+		glowText(c, b.Glyph, fmt.Sprintf("bubble-%d", b.ID), bubbleFontSize, colorBubble, colorBubbleGlow, b.X, b.Y, scale)
 	}
 	for _, f := range a.tank.Foods {
 		fade := f.Fade()
-		glowText(c, f.Glyph, fmt.Sprintf("food-%d", f.ID), foodFontSize, withAlpha(colorFood, fade), withAlpha(colorFoodEdge, fade), f.X, f.Y)
+		glowText(c, f.Glyph, fmt.Sprintf("food-%d", f.ID), foodFontSize, withAlpha(colorFood, fade), withAlpha(colorFoodEdge, fade), f.X, f.Y, scale)
 	}
 	for _, fish := range a.tank.Fishes {
-		glowText(c, fish.Sprite(), fmt.Sprintf("fish-%d", fish.ID), fishFontSize, colorFish, colorFishGlow, fish.X, fish.Y)
+		glowText(c, fish.Sprite(), fmt.Sprintf("fish-%d", fish.ID), fishFontSize, colorFish, colorFishGlow, fish.X, fish.Y, scale)
 	}
 	for _, ch := range a.tank.Chomps {
 		fade := 1 - ch.Age/ch.Life
@@ -149,10 +150,10 @@ func (a *app) view(c *ui.Context) {
 			fade = 0.65 + 0.35*fade
 		}
 		ui.Text(c, ch.Text).Key(fmt.Sprintf("chomp-%d", ch.ID)).
-			Font("monospace").FontSize(chompFontSize).Bold().
-			TextColor(colorChomp).TextStroke(1.1, colorChompEdge).
+			Font("monospace").FontSize(scaledFontSize(chompFontSize, scale)).Bold().
+			TextColor(colorChomp).TextStroke(scaledFontSize(1.1, scale), colorChompEdge).
 			Opacity(float32(fade)).
-			Absolute().Left(float32(ch.X)).Top(float32(ch.Y))
+			Absolute().Left(float32(ch.X * scale)).Top(float32(ch.Y * scale))
 	}
 
 	hint := colorFeedHint
@@ -160,23 +161,23 @@ func (a *app) view(c *ui.Context) {
 		hint = colorFeedHintHot
 	}
 	feed := ui.Box(c).Key("feed-hit").
-		Absolute().Left(float32(pan.FX)).Top(float32(pan.FY)).
-		Size(float32(pan.FW), float32(pan.FH)).
+		Absolute().Left(float32(pan.FX*scale)).Top(float32(pan.FY*scale)).
+		Size(float32(pan.FW*scale), float32(pan.FH*scale)).
 		Cursor(ui.CursorPointer).
 		HandleInput(func(ev ui.InputEvent) bool {
 			if a.clickThrough {
 				return false
 			}
-			// InputEvent X/Y are local to this box.
-			x := float64(ev.X + float32(pan.FX))
-			y := float64(ev.Y + float32(pan.FY))
+			// InputEvent X/Y are local to this (already scaled) box.
+			x := pan.FX + float64(ev.X)/scale
+			y := pan.FY + float64(ev.Y)/scale
 			in := pan.ContainsFeed(x, y)
 			switch ev.Kind {
 			case ui.InputPointerDown:
 				if ev.Button != 0 {
 					return false
 				}
-				a.pressX, a.pressY = ev.X+float32(pan.FX), ev.Y+float32(pan.FY)
+				a.pressX, a.pressY = ev.X+float32(pan.FX*scale), ev.Y+float32(pan.FY*scale)
 				a.feeder.Down(now, x, y)
 				return true
 			case ui.InputPointerMove:
@@ -199,20 +200,20 @@ func (a *app) view(c *ui.Context) {
 		}
 	}
 	ui.Text(c, feedLabel).Key("feed-hint").
-		Font("monospace").FontSize(11).Bold().
+		Font("monospace").FontSize(scaledFontSize(11, scale)).Bold().
 		TextColor(hint).
-		Absolute().Left(float32(pan.FX + pan.FW/2 - 16)).Top(float32(pan.FY + pan.FH*0.28))
+		Absolute().Left(float32((pan.FX + pan.FW/2 - 16) * scale)).Top(float32((pan.FY + pan.FH*0.28) * scale))
 
 	// The stand is the drag area. Official DragWindow and SetPosition
 	// were both observed not to move this frameless window on Linux;
 	// the path is kept but not claimed to work.
 	stand := ui.Box(c).Key("drag").
-		Absolute().Left(float32(pan.BX)).Top(float32(pan.BY)).
-		Size(float32(pan.BW), float32(pan.BH+pan.LegH)).
+		Absolute().Left(float32(pan.BX*scale)).Top(float32(pan.BY*scale)).
+		Size(float32(pan.BW*scale), float32((pan.BH+pan.LegH)*scale)).
 		Cursor(ui.CursorMove).
 		HitTest(func(x, y float32, r ui.Rect) bool {
 			// Leave the SET control a click target of its own.
-			if x >= r.W-40 && y <= 24 {
+			if x >= r.W-float32(40*scale) && y <= float32(24*scale) {
 				return false
 			}
 			return true
@@ -222,21 +223,28 @@ func (a *app) view(c *ui.Context) {
 		a.showGlassMenu()
 	}
 	ui.Text(c, dragLabel).Key("drag-label").
-		Font("monospace").FontSize(handleFontSize).Bold().
+		Font("monospace").FontSize(scaledFontSize(handleFontSize, scale)).Bold().
 		TextColor(colorHandleMute).
-		Absolute().Left(float32(pan.BX + pan.BW/2 - 18)).Top(float32(pan.BY + pan.BH*0.35))
+		Absolute().Left(float32((pan.BX + pan.BW/2 - 18) * scale)).Top(float32((pan.BY + pan.BH*0.35) * scale))
 
-	setX := pan.BX + pan.BW - 40
-	setY := pan.BY + 6
+	setW, setH := 36*scale, 18*scale
+	if setW < 32 {
+		setW = 32
+	}
+	if setH < 16 {
+		setH = 16
+	}
+	setX := (pan.BX+pan.BW)*scale - setW
+	setY := pan.BY*scale + 6*scale
 	set := ui.Box(c).Key("glass-set").
 		Absolute().Left(float32(setX)).Top(float32(setY)).
-		Size(36, 18).
+		Size(float32(setW), float32(setH)).
 		Cursor(ui.CursorPointer).
 		HitTest(func(x, y float32, r ui.Rect) bool { return true })
 	setLabelEl := ui.Text(c, setLabel).Key("set-label").
-		Font("monospace").FontSize(handleFontSize).Bold().
+		Font("monospace").FontSize(scaledFontSize(handleFontSize, scale)).Bold().
 		TextColor(colorHandleMute).
-		Absolute().Left(float32(setX + 4)).Top(float32(setY + 1))
+		Absolute().Left(float32(setX + 4*scale)).Top(float32(setY + 1*scale))
 	if set.Clicked() || setLabelEl.Clicked() {
 		a.openSettings()
 	}
@@ -280,10 +288,22 @@ func (a *app) ready() {
 		a.tray = nil
 	}
 
+	if dir, err := mygo.App.Path(mygo.PathUserData); err != nil {
+		log.Println("user data path:", err)
+	} else {
+		a.settingsPath = settingsPath(dir)
+		if s, err := LoadSettings(a.settingsPath); err != nil {
+			log.Println("load settings:", err)
+		} else {
+			a.settings = s
+			a.lastMode, a.lastOpacity, a.lastHighlight, a.lastScale = s.Mode, s.Opacity, s.Highlight, s.Scale
+		}
+	}
+	tw, th := WindowSize(a.settings.ClampedScale())
 	a.win = mygo.NewWindow(mygo.WindowOptions{
 		Title:             "小鱼缸",
-		Width:             windowW,
-		Height:            windowH,
+		Width:             tw,
+		Height:            th,
 		Frameless:         true,
 		Transparent:       true,
 		AlwaysOnTop:       a.alwaysOnTop,
@@ -301,17 +321,6 @@ func (a *app) ready() {
 			a.win.Hide()
 		}
 	})
-	if dir, err := mygo.App.Path(mygo.PathUserData); err != nil {
-		log.Println("user data path:", err)
-	} else {
-		a.settingsPath = settingsPath(dir)
-		if s, err := LoadSettings(a.settingsPath); err != nil {
-			log.Println("load settings:", err)
-		} else {
-			a.settings = s
-			a.lastMode, a.lastOpacity, a.lastHighlight = s.Mode, s.Opacity, s.Highlight
-		}
-	}
 	if dark, ok := tryThemeIsDark(); ok {
 		a.systemDark, a.systemDarkOK = dark, true
 	}
@@ -338,9 +347,42 @@ func (a *app) applyHitRegion() {
 		return
 	}
 	x, y, w, h := a.tank.Panel.FrameBounds()
+	sx, sy, sw, sh := scaleFrameBounds(x, y, w, h, a.settings.ClampedScale())
 	a.win.SetInputRegion([]mygo.Rectangle{{
-		X: int(x), Y: int(y), Width: int(w + 0.5), Height: int(h + 0.5),
+		X: sx, Y: sy, Width: sw, Height: sh,
 	}})
+}
+
+func (a *app) applyTankScale() {
+	a.settings.Clamp()
+	a.lastScale = a.settings.Scale
+	if a.win == nil {
+		return
+	}
+	w, h := WindowSize(a.settings.Scale)
+	a.win.SetSize(w, h)
+	a.keepWindowOnScreen()
+	a.applyHitRegion()
+}
+
+func (a *app) keepWindowOnScreen() {
+	if a.win == nil {
+		return
+	}
+	x, y := a.win.Position()
+	w, h := a.win.Size()
+	area := workArea{}
+	d := mygo.Screen.DisplayMatching(mygo.Rectangle{X: x, Y: y, Width: w, Height: h})
+	if d.WorkArea.Width > 0 && d.WorkArea.Height > 0 {
+		area = workArea{X: d.WorkArea.X, Y: d.WorkArea.Y, Width: d.WorkArea.Width, Height: d.WorkArea.Height}
+	} else {
+		d = mygo.Screen.PrimaryDisplay()
+		area = workArea{X: d.WorkArea.X, Y: d.WorkArea.Y, Width: d.WorkArea.Width, Height: d.WorkArea.Height}
+	}
+	nx, ny := clampPositionToWorkArea(x, y, w, h, area)
+	if nx != x || ny != y {
+		a.win.SetPosition(nx, ny)
+	}
 }
 
 func (a *app) bindGlobalShortcuts() {

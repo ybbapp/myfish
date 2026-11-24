@@ -10,9 +10,19 @@ import (
 	"mygo-desktop-fish/tank"
 )
 
+func testView(a *app) *ui.Tester {
+	w, h := WindowSize(a.settings.ClampedScale())
+	return ui.NewTester(a.view, w, h)
+}
+
+func winXY(a *app, x, y float64) (float32, float32) {
+	wx, wy := designToWindow(x, y, a.settings.ClampedScale())
+	return float32(wx), float32(wy)
+}
+
 func TestViewShowsPlateFishHandleAndFeedHint(t *testing.T) {
 	a := newApp()
-	tt := ui.NewTester(a.view, windowW, windowH)
+	tt := testView(a)
 	if !tt.HasText(dragLabel) {
 		t.Errorf("missing drag label, texts %q", tt.Texts())
 	}
@@ -40,8 +50,8 @@ func TestViewClickInPlateDoesNotDropFood(t *testing.T) {
 	a := newApp()
 	a.tank.Foods = nil
 	p := a.tank.Panel
-	tt := ui.NewTester(a.view, windowW, windowH)
-	tt.ClickAt(float32(p.IX+p.IW/2), float32(p.IY+p.IH/3))
+	tt := testView(a)
+	tt.ClickAt(winXY(a, p.IX+p.IW/2, p.IY+p.IH/3))
 	if len(a.tank.Foods) != 0 {
 		t.Fatalf("click on the plate dropped food: %+v", a.tank.Foods)
 	}
@@ -51,9 +61,9 @@ func TestViewClickAbovePlateDropsFoodAtX(t *testing.T) {
 	a := newApp()
 	a.tank.Foods = nil
 	p := a.tank.Panel
-	tt := ui.NewTester(a.view, windowW, windowH)
+	tt := testView(a)
 	x := p.FX + p.FW*0.7
-	tt.ClickAt(float32(x), float32(p.FY+p.FH/2))
+	tt.ClickAt(winXY(a, x, p.FY+p.FH/2))
 	if len(a.tank.Foods) != 1 {
 		t.Fatalf("click on the feed strip did not drop food, texts %q", tt.Texts())
 	}
@@ -69,8 +79,8 @@ func TestViewClickOnStandDoesNotDropFood(t *testing.T) {
 	a := newApp()
 	a.tank.Foods = nil
 	p := a.tank.Panel
-	tt := ui.NewTester(a.view, windowW, windowH)
-	tt.ClickAt(float32(p.BX+p.BW/2), float32(p.BY+p.BH/2))
+	tt := testView(a)
+	tt.ClickAt(winXY(a, p.BX+p.BW/2, p.BY+p.BH/2))
 	if len(a.tank.Foods) != 0 {
 		t.Fatalf("click on the stand dropped food: %+v", a.tank.Foods)
 	}
@@ -79,7 +89,7 @@ func TestViewClickOnStandDoesNotDropFood(t *testing.T) {
 func TestViewClickOutsideDoesNotDropFood(t *testing.T) {
 	a := newApp()
 	a.tank.Foods = nil
-	tt := ui.NewTester(a.view, windowW, windowH)
+	tt := testView(a)
 	tt.ClickAt(4, 4)
 	if len(a.tank.Foods) != 0 {
 		t.Fatalf("click outside the plate dropped food: %+v", a.tank.Foods)
@@ -90,8 +100,8 @@ func TestViewHoverDoesNotDropFood(t *testing.T) {
 	a := newApp()
 	a.tank.Foods = nil
 	p := a.tank.Panel
-	tt := ui.NewTester(a.view, windowW, windowH)
-	tt.Move(float32(p.IX+p.IW/2), float32(p.IY+p.IH/3))
+	tt := testView(a)
+	tt.Move(winXY(a, p.IX+p.IW/2, p.IY+p.IH/3))
 	if len(a.tank.Foods) != 0 {
 		t.Fatalf("hover dropped food: %+v", a.tank.Foods)
 	}
@@ -104,13 +114,13 @@ func TestViewHoverDoesNotStealFeedClick(t *testing.T) {
 	a := newApp()
 	a.tank.Foods = nil
 	p := a.tank.Panel
-	tt := ui.NewTester(a.view, windowW, windowH)
-	tt.Move(float32(p.IX+p.IW/2), float32(p.IY+p.IH/3))
+	tt := testView(a)
+	tt.Move(winXY(a, p.IX+p.IW/2, p.IY+p.IH/3))
 	if !a.tank.Hovering {
 		t.Fatal("hover over the plate was not applied")
 	}
 	x := p.FX + p.FW*0.6
-	tt.ClickAt(float32(x), float32(p.FY+p.FH/2))
+	tt.ClickAt(winXY(a, x, p.FY+p.FH/2))
 	if len(a.tank.Foods) != 1 {
 		t.Fatalf("feed click after hover did not drop food: %d", len(a.tank.Foods))
 	}
@@ -119,8 +129,8 @@ func TestViewHoverDoesNotStealFeedClick(t *testing.T) {
 func TestViewHoverLeaveResumesWander(t *testing.T) {
 	a := newApp()
 	p := a.tank.Panel
-	tt := ui.NewTester(a.view, windowW, windowH)
-	tt.Move(float32(p.IX+p.IW/2), float32(p.IY+p.IH/3))
+	tt := testView(a)
+	tt.Move(winXY(a, p.IX+p.IW/2, p.IY+p.IH/3))
 	if !a.tank.Hovering {
 		t.Fatal("hover over the plate was not applied")
 	}
@@ -138,7 +148,7 @@ func TestViewHoverLeaveResumesWander(t *testing.T) {
 func TestEscapeRestoresInteraction(t *testing.T) {
 	a := newApp()
 	a.clickThrough = true
-	tt := ui.NewTester(a.view, windowW, windowH)
+	tt := testView(a)
 	tt.Key(0, ui.KeyEscape)
 	if a.clickThrough {
 		t.Fatal("Escape did not restore interaction")
@@ -148,7 +158,7 @@ func TestEscapeRestoresInteraction(t *testing.T) {
 func TestCtrlAltIRestoresAndDoesNotToggle(t *testing.T) {
 	a := newApp()
 	a.clickThrough = true
-	tt := ui.NewTester(a.view, windowW, windowH)
+	tt := testView(a)
 	tt.Key(ui.Ctrl|ui.Alt, ui.KeyI)
 	if a.clickThrough {
 		t.Fatal("Ctrl+Alt+I did not restore interaction")
@@ -192,7 +202,7 @@ func TestToggleClickThroughIsSeparate(t *testing.T) {
 
 func TestViewSetButtonOpensSettings(t *testing.T) {
 	a := newApp()
-	tt := ui.NewTester(a.view, windowW, windowH)
+	tt := testView(a)
 	if err := tt.Click(setLabel); err != nil {
 		t.Fatalf("click SET: %v (texts %q)", err, tt.Texts())
 	}
@@ -205,7 +215,7 @@ func TestViewSetButtonOpensSettings(t *testing.T) {
 func TestSettingsViewListsPresets(t *testing.T) {
 	a := newApp()
 	tt := ui.NewTester(a.settingsView, settingsW, settingsH)
-	for _, s := range []string{"真透明（无填充）", "浅色底", "深色底", "自动（跟随系统浅深主题）", "关闭"} {
+	for _, s := range []string{"真透明（无填充）", "浅色底", "深色底", "自动（跟随系统浅深主题）", "恢复默认大小", "关闭"} {
 		if !tt.HasText(s) {
 			t.Errorf("settings missing %q, texts %q", s, tt.Texts())
 		}
@@ -261,4 +271,63 @@ func TestSettingsReportedAdjustmentSequenceHeadless(t *testing.T) {
 		t.Fatal("closing settings requested app quit")
 	}
 	t.Logf("headless production settings view final=%+v quitting=%v; native lifecycle not exercised", a.settings, a.quitting)
+}
+
+func TestViewFeedHoverAndStandAtOtherScales(t *testing.T) {
+	for _, scale := range []float64{minScale, 1, maxScale} {
+		a := newApp()
+		a.settings.Scale = scale
+		a.settings.Clamp()
+		a.tank.Foods = nil
+		p := a.tank.Panel
+		tt := testView(a)
+		tt.Move(winXY(a, p.IX+p.IW/2, p.IY+p.IH/3))
+		if !a.tank.Hovering {
+			t.Fatalf("scale %v: hover over the plate was not applied", scale)
+		}
+		if len(a.tank.Foods) != 0 {
+			t.Fatalf("scale %v: hover dropped food", scale)
+		}
+		x := p.FX + p.FW*0.25
+		tt.ClickAt(winXY(a, x, p.FY+p.FH/2))
+		if len(a.tank.Foods) != 1 {
+			t.Fatalf("scale %v: feed click did not drop food", scale)
+		}
+		if math.Abs(a.tank.Foods[0].X+4-x) > 10 {
+			t.Fatalf("scale %v: food x=%v click x=%v", scale, a.tank.Foods[0].X, x)
+		}
+		a.tank.Foods = nil
+		tt.ClickAt(winXY(a, p.BX+p.BW/2, p.BY+p.BH/2))
+		if len(a.tank.Foods) != 0 {
+			t.Fatalf("scale %v: stand click dropped food", scale)
+		}
+	}
+}
+
+func TestSettingsScaleSliderAndRestore(t *testing.T) {
+	a := newApp()
+	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	tt := ui.NewTester(a.settingsView, settingsW, settingsH)
+	r, ok := tt.Find("tank-scale")
+	if !ok {
+		t.Fatalf("missing tank-scale slider, texts %q", tt.Texts())
+	}
+	tt.ClickAt(r.X+r.W*0.95, r.Y+r.H/2)
+	tt.Frame()
+	if a.settings.Scale < 1.1 {
+		t.Fatalf("scale slider did not increase size: %+v", a.settings)
+	}
+	if err := tt.Click("恢复默认大小"); err != nil {
+		t.Fatal(err)
+	}
+	if a.settings.Scale != defaultScale {
+		t.Fatalf("restore default did not reset scale: %v", a.settings.Scale)
+	}
+	loaded, err := LoadSettings(a.settingsPath)
+	if err != nil || loaded.Scale != defaultScale {
+		t.Fatalf("restored scale was not persisted: %+v err=%v", loaded, err)
+	}
+	if a.quitting {
+		t.Fatal("scale controls requested quit")
+	}
 }
