@@ -331,3 +331,85 @@ func TestSettingsScaleSliderAndRestore(t *testing.T) {
 		t.Fatal("scale controls requested quit")
 	}
 }
+
+func TestViewEastEdgeHoverAndDragUpdatesScale(t *testing.T) {
+	a := newApp()
+	start := a.settings.ClampedScale()
+	pan := a.tank.Panel
+	fx, fy, fw, fh := pan.FrameBounds()
+	x, y, w, h := windowFrame(fx, fy, fw, fh, start)
+	tt := testView(a)
+	ex, ey := float32(x+w), float32(y+h/2)
+	tt.Move(ex, ey)
+	if tt.Cursor() != ui.CursorResizeE {
+		t.Fatalf("east edge cursor=%v want CursorResizeE", tt.Cursor())
+	}
+	tt.Press(ex, ey)
+	if a.resizing != resizeE {
+		t.Fatalf("press on east edge: resizing=%s", a.resizing)
+	}
+	sw, _ := WindowSize(start)
+	tt.Move(ex+float32(0.20*float64(sw)), ey)
+	if a.settings.Scale <= start {
+		t.Fatalf("east drag should raise scale, got %v start %v", a.settings.Scale, start)
+	}
+	if a.settings.Scale > maxScale {
+		t.Fatalf("scale %v exceeds max", a.settings.Scale)
+	}
+	if a.lastScale != a.settings.Scale {
+		t.Fatalf("lastScale %v should follow live scale %v so the settings slider can stay in sync", a.lastScale, a.settings.Scale)
+	}
+	got := a.settings.Scale
+	tt.Release(ex+float32(0.20*float64(sw)), ey)
+	if a.resizing != resizeNone {
+		t.Fatal("resize should stop on release")
+	}
+	if a.settings.Scale != got {
+		t.Fatalf("scale changed after release: %v vs %v", a.settings.Scale, got)
+	}
+}
+
+func TestViewFeedAndStandStayDistinctFromResize(t *testing.T) {
+	a := newApp()
+	a.tank.Foods = nil
+	pan := a.tank.Panel
+	fx, fy, fw, fh := pan.FrameBounds()
+	scale := a.settings.ClampedScale()
+	x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
+	tt := testView(a)
+	tt.ClickAt(float32(x+w), float32(y+h/2))
+	if len(a.tank.Foods) != 0 {
+		t.Fatalf("clicking the east resize edge dropped food: %+v", a.tank.Foods)
+	}
+	if a.resizing != resizeNone {
+		t.Fatal("click (press+release) left resize active")
+	}
+	tt.ClickAt(winXY(a, pan.FX+pan.FW*0.7, pan.FY+pan.FH/2))
+	if len(a.tank.Foods) != 1 {
+		t.Fatalf("FEED mid should still drop food after an edge click, foods=%d", len(a.tank.Foods))
+	}
+	tt.Move(winXY(a, pan.BX+pan.BW/2, pan.BY+(pan.BH+pan.LegH)/2))
+	if tt.Cursor() != ui.CursorMove {
+		t.Fatalf("stand interior cursor=%v want CursorMove", tt.Cursor())
+	}
+}
+
+func TestFinishResizeStopsAndCanPersist(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp()
+	a.settingsPath = filepath.Join(dir, "settings.json")
+	a.resizing = resizeE
+	a.settings.Scale = 1.1
+	a.lastScale = 1.1
+	a.finishResize()
+	if a.resizing != resizeNone {
+		t.Fatal("finishResize should clear the drag")
+	}
+	got, err := LoadSettings(a.settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(got.Scale-1.1) > 1e-9 {
+		t.Fatalf("persisted scale %v want 1.1", got.Scale)
+	}
+}

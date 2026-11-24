@@ -27,33 +27,41 @@ const (
 )
 
 type app struct {
-	win           *mygo.Window
-	tray          *mygo.Tray
-	tank          *tank.Tank
-	last          time.Time
-	pressX        float32
-	pressY        float32
-	ptrX          float32
-	ptrY          float32
-	ptrSeen       bool
-	dragging      bool
-	dragLocalX    float32
-	dragLocalY    float32
-	alwaysOnTop   bool
-	clickThrough  bool
-	quitting      bool
-	shortcutsOn   bool
-	feeder        *tank.Feeder
-	settings      Settings
-	settingsPath  string
-	setWin        *mygo.Window
-	systemDark    bool
-	systemDarkOK  bool
-	lastMode      GlassMode
-	lastOpacity   float64
-	lastHighlight float64
-	lastScale     float64
-	settingsOpen  bool
+	win              *mygo.Window
+	tray             *mygo.Tray
+	tank             *tank.Tank
+	last             time.Time
+	pressX           float32
+	pressY           float32
+	ptrX             float32
+	ptrY             float32
+	ptrSeen          bool
+	dragging         bool
+	dragLocalX       float32
+	dragLocalY       float32
+	alwaysOnTop      bool
+	clickThrough     bool
+	quitting         bool
+	shortcutsOn      bool
+	feeder           *tank.Feeder
+	settings         Settings
+	settingsPath     string
+	setWin           *mygo.Window
+	systemDark       bool
+	systemDarkOK     bool
+	lastMode         GlassMode
+	lastOpacity      float64
+	lastHighlight    float64
+	lastScale        float64
+	settingsOpen     bool
+	resizing         resizeEdge
+	resizeStartScale float64
+	resizeStartX     int
+	resizeStartY     int
+	resizeStartW     int
+	resizeStartH     int
+	resizeStartSX    int
+	resizeStartSY    int
 }
 
 func newApp() *app {
@@ -97,11 +105,22 @@ func (a *app) view(c *ui.Context) {
 	c.Root().Background(ui.Transparent)
 
 	pan := a.tank.Panel
+	fx, fy, fw, fh := pan.FrameBounds()
+	setRect := a.setButtonRect(scale)
+	hoverEdge := resizeNone
+	if a.resizing != resizeNone {
+		hoverEdge = a.resizing
+	} else if a.ptrSeen {
+		hoverEdge = hitResizeEdge(float64(a.ptrX), float64(a.ptrY), fx, fy, fw, fh, scale, setRect)
+	}
 	feedHot := false
 	stage := ui.Box(c).Fill()
 	stage.HitTest(func(x, y float32, r ui.Rect) bool {
 		dx, dy := windowToDesign(float64(x), float64(y), scale)
-		return pan.ContainsFrame(dx, dy)
+		if pan.ContainsFrame(dx, dy) {
+			return true
+		}
+		return hitResizeEdge(float64(x), float64(y), fx, fy, fw, fh, scale, setRect) != resizeNone
 	})
 	stage.HandleInput(func(ev ui.InputEvent) bool {
 		if ev.Kind == ui.InputPointerDown {
@@ -120,12 +139,13 @@ func (a *app) view(c *ui.Context) {
 	} else if a.tank.Hovering && !(stage.Hovered() && pan.ContainsGlass(ptrDX, ptrDY)) {
 		a.tank.ClearHover()
 	}
-	if a.ptrSeen && stage.Hovered() && pan.ContainsFeed(ptrDX, ptrDY) {
+	if a.ptrSeen && stage.Hovered() && pan.ContainsFeed(ptrDX, ptrDY) && hoverEdge == resizeNone {
 		feedHot = true
 	}
 	style := a.settings.Resolve(a.systemDark)
 	stage.Draw(func(p *ui.Painter, r ui.Rect) {
 		drawChassis(p, pan, feedHot, style, scale)
+		drawResizeHint(p, fx, fy, fw, fh, scale, hoverEdge)
 	})
 
 	for i, pl := range a.tank.Plants {
@@ -164,6 +184,11 @@ func (a *app) view(c *ui.Context) {
 		Absolute().Left(float32(pan.FX*scale)).Top(float32(pan.FY*scale)).
 		Size(float32(pan.FW*scale), float32(pan.FH*scale)).
 		Cursor(ui.CursorPointer).
+		HitTest(func(x, y float32, r ui.Rect) bool {
+			wx := float64(x) + pan.FX*scale
+			wy := float64(y) + pan.FY*scale
+			return hitResizeEdge(wx, wy, fx, fy, fw, fh, scale, setRect) == resizeNone
+		}).
 		HandleInput(func(ev ui.InputEvent) bool {
 			if a.clickThrough {
 				return false
@@ -216,6 +241,12 @@ func (a *app) view(c *ui.Context) {
 			if x >= r.W-float32(40*scale) && y <= float32(24*scale) {
 				return false
 			}
+			// Edge/corner bands are the resize handles, not a move drag.
+			wx := float64(x) + pan.BX*scale
+			wy := float64(y) + pan.BY*scale
+			if hitResizeEdge(wx, wy, fx, fy, fw, fh, scale, setRect) != resizeNone {
+				return false
+			}
 			return true
 		}).
 		HandleInput(a.onDragInput)
@@ -227,15 +258,20 @@ func (a *app) view(c *ui.Context) {
 		TextColor(colorHandleMute).
 		Absolute().Left(float32((pan.BX + pan.BW/2 - 18) * scale)).Top(float32((pan.BY + pan.BH*0.35) * scale))
 
-	setW, setH := 36*scale, 18*scale
-	if setW < 32 {
-		setW = 32
-	}
-	if setH < 16 {
-		setH = 16
-	}
-	setX := (pan.BX+pan.BW)*scale - setW
-	setY := pan.BY*scale + 6*scale
+	setW, setH := setRect.W, setRect.H
+	setX, setY := setRect.X, setRect.Y
+	rx, ry, rw, rh := resizeInputBounds(fx, fy, fw, fh, scale)
+	resize := ui.Box(c).Key("resize-hit").
+		Absolute().Left(float32(rx)).Top(float32(ry)).
+		Size(float32(rw), float32(rh)).
+		Cursor(cursorForResize(hoverEdge)).
+		HitTest(func(x, y float32, r ui.Rect) bool {
+			wx := float64(x) + float64(rx)
+			wy := float64(y) + float64(ry)
+			return hitResizeEdge(wx, wy, fx, fy, fw, fh, scale, setRect) != resizeNone
+		}).
+		HandleInput(a.onResizeInput)
+	_ = resize
 	set := ui.Box(c).Key("glass-set").
 		Absolute().Left(float32(setX)).Top(float32(setY)).
 		Size(float32(setW), float32(setH)).
@@ -274,6 +310,130 @@ func (a *app) onDragInput(ev ui.InputEvent) bool {
 	default:
 		return a.dragging
 	}
+}
+
+func (a *app) setButtonRect(scale float64) rectWH {
+	pan := a.tank.Panel
+	setW, setH := 36*scale, 18*scale
+	if setW < 32 {
+		setW = 32
+	}
+	if setH < 16 {
+		setH = 16
+	}
+	return rectWH{
+		X: (pan.BX+pan.BW)*scale - setW,
+		Y: pan.BY*scale + 6*scale,
+		W: setW,
+		H: setH,
+	}
+}
+
+func cursorForResize(edge resizeEdge) ui.Cursor {
+	switch edge {
+	case resizeE:
+		return ui.CursorResizeE
+	case resizeW:
+		return ui.CursorResizeW
+	case resizeN:
+		return ui.CursorResizeN
+	case resizeS:
+		return ui.CursorResizeS
+	case resizeNW, resizeSE:
+		return ui.CursorResizeNWSE
+	case resizeNE, resizeSW:
+		return ui.CursorResizeNESW
+	default:
+		return ui.CursorDefault
+	}
+}
+
+func (a *app) pointerScreen(winX, winY float32) (int, int) {
+	if a.win == nil {
+		return int(winX), int(winY)
+	}
+	x, y := a.win.Position()
+	return x + int(winX), y + int(winY)
+}
+
+func (a *app) onResizeInput(ev ui.InputEvent) bool {
+	if a.clickThrough {
+		return false
+	}
+	scale := a.settings.ClampedScale()
+	fx, fy, fw, fh := a.tank.Panel.FrameBounds()
+	rx, ry, _, _ := resizeInputBounds(fx, fy, fw, fh, scale)
+	winX := ev.X + float32(rx)
+	winY := ev.Y + float32(ry)
+	if ev.Kind == ui.InputPointerDown || ev.Kind == ui.InputPointerMove || ev.Kind == ui.InputPointerUp {
+		a.ptrX, a.ptrY = winX, winY
+		a.ptrSeen = true
+	}
+	switch ev.Kind {
+	case ui.InputPointerDown:
+		if ev.Button != 0 {
+			return false
+		}
+		edge := hitResizeEdge(float64(winX), float64(winY), fx, fy, fw, fh, scale, a.setButtonRect(scale))
+		if edge == resizeNone {
+			return false
+		}
+		a.dragging = false
+		a.feeder.Cancel()
+		a.resizing = edge
+		a.resizeStartScale = scale
+		if a.win != nil {
+			a.resizeStartX, a.resizeStartY = a.win.Position()
+			a.resizeStartW, a.resizeStartH = a.win.Size()
+		} else {
+			a.resizeStartW, a.resizeStartH = WindowSize(scale)
+		}
+		a.resizeStartSX, a.resizeStartSY = a.pointerScreen(winX, winY)
+		return true
+	case ui.InputPointerMove:
+		if a.resizing == resizeNone {
+			return false
+		}
+		sx, sy := a.pointerScreen(winX, winY)
+		dx := float64(sx - a.resizeStartSX)
+		dy := float64(sy - a.resizeStartSY)
+		a.applyAnchoredScale(scaleFromResizeDrag(a.resizing, a.resizeStartScale, a.resizeStartW, a.resizeStartH, dx, dy))
+		return true
+	case ui.InputPointerUp:
+		if a.resizing == resizeNone {
+			return false
+		}
+		a.finishResize()
+		return true
+	default:
+		return a.resizing != resizeNone
+	}
+}
+
+func (a *app) applyAnchoredScale(newScale float64) {
+	a.settings.Scale = clampScale(newScale)
+	a.lastScale = a.settings.Scale
+	if a.win == nil {
+		return
+	}
+	w, h := WindowSize(a.settings.Scale)
+	x, y := positionAfterResize(a.resizing, a.resizeStartX, a.resizeStartY, a.resizeStartW, a.resizeStartH, w, h)
+	a.win.SetSize(w, h)
+	a.win.SetPosition(x, y)
+	a.keepWindowOnScreen()
+	a.applyHitRegion()
+}
+
+func (a *app) finishResize() {
+	if a.resizing == resizeNone {
+		return
+	}
+	a.resizing = resizeNone
+	if a.win != nil {
+		a.keepWindowOnScreen()
+		a.applyHitRegion()
+	}
+	a.persistSettings()
 }
 
 func (a *app) ready() {
@@ -329,7 +489,11 @@ func (a *app) ready() {
 			a.systemDark, a.systemDarkOK = dark, true
 		}
 	})
-	a.win.OnBlur(func() { a.feeder.Cancel() })
+	a.win.OnBlur(func() {
+		a.feeder.Cancel()
+		a.dragging = false
+		a.finishResize()
+	})
 	a.applyHitRegion()
 	a.syncTrayMenu()
 	if a.tray != nil {
@@ -347,7 +511,7 @@ func (a *app) applyHitRegion() {
 		return
 	}
 	x, y, w, h := a.tank.Panel.FrameBounds()
-	sx, sy, sw, sh := scaleFrameBounds(x, y, w, h, a.settings.ClampedScale())
+	sx, sy, sw, sh := resizeInputBounds(x, y, w, h, a.settings.ClampedScale())
 	a.win.SetInputRegion([]mygo.Rectangle{{
 		X: sx, Y: sy, Width: sw, Height: sh,
 	}})

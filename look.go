@@ -31,6 +31,7 @@ var (
 	colorFeedHintHot = ui.RGBA(70, 140, 138, 0.70)
 	colorFeedLine    = ui.RGBA(190, 220, 228, 0.40)
 	colorFeedLineHot = ui.RGBA(210, 234, 240, 0.62)
+	colorResizeHint  = ui.RGBA(210, 245, 255, 0.75)
 )
 
 const (
@@ -139,4 +140,30 @@ func glowText(c *ui.Context, s, key string, size float32, fill, glow ui.Color, x
 		Font("monospace").FontSize(scaledFontSize(float64(size), scale)).Bold().
 		TextColor(fill).TextStroke(float32(stroke), glow).
 		Absolute().Left(float32(x * clampScale(scale))).Top(float32(y * clampScale(scale)))
+}
+
+func drawResizeHint(p *ui.Painter, fx, fy, fw, fh, scale float64, edge resizeEdge) {
+	if edge == resizeNone {
+		return
+	}
+	x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
+	thick := float32(2)
+	if thick < 1.2 {
+		thick = 1.2
+	}
+	stroke := func(rx, ry, rw, rh float64) {
+		p.Stroke(ui.Rect{X: float32(rx), Y: float32(ry), W: float32(rw), H: float32(rh)}, colorResizeHint, 0, thick)
+	}
+	if edge.hasN() {
+		stroke(x, y, w, 0)
+	}
+	if edge.hasS() {
+		stroke(x, y+h, w, 0)
+	}
+	if edge.hasW() {
+		stroke(x, y, 0, h)
+	}
+	if edge.hasE() {
+		stroke(x+w, y, 0, h)
+	}
 }
