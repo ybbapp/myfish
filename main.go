@@ -200,6 +200,9 @@ func (a *app) view(c *ui.Context) {
 			// feeding still uses a top-of-tank coordinate.
 			wx := float64(ev.X) + feedHit.X
 			wy := float64(ev.Y) + feedHit.Y
+			if ev.Kind == ui.InputPointerDown || ev.Kind == ui.InputPointerUp || ev.Kind == ui.InputPointerMove {
+				a.debugPointer("feed", ev, float32(wx), float32(wy), fmt.Sprintf("foods=%d holding=%v", len(a.tank.Foods), a.feeder.Holding()))
+			}
 			x, y := windowToDesign(wx, wy, scale)
 			if x < pan.FX {
 				x = pan.FX
@@ -227,7 +230,10 @@ func (a *app) view(c *ui.Context) {
 				return a.feeder.Holding()
 			case ui.InputPointerUp:
 				if a.feeder.Up(now, in) {
-					a.tank.FeedFromAbove(a.feeder.X, a.feeder.Y)
+					ok := a.tank.FeedFromAbove(a.feeder.X, a.feeder.Y)
+					dbg("feed drop from click ok=%v foods=%d x=%.1f y=%.1f", ok, len(a.tank.Foods), a.feeder.X, a.feeder.Y)
+				} else {
+					dbg("feed up did not drop in=%v foods=%d canceled_or_hold", in, len(a.tank.Foods))
 				}
 				return true
 			default:
@@ -285,10 +291,13 @@ func (a *app) view(c *ui.Context) {
 			if a.resizing != resizeNone {
 				// Keep receiving moves if capture is lost after the
 				// pointer leaves the 8 DIP handle.
+				debugHitChange("resize", fmt.Sprintf("capturing edge=%s at %.1f,%.1f", a.resizing, x, y))
 				return true
 			}
 			// x,y are window DIPs (same space as r.X/r.Y), not local.
-			return hitResizeEdge(float64(x), float64(y), fx, fy, fw, fh, scale, setRect) != resizeNone
+			edge := hitResizeEdge(float64(x), float64(y), fx, fy, fw, fh, scale, setRect)
+			debugHitChange("resize", fmt.Sprintf("edge=%s at %.1f,%.1f scale=%.3f box=%.0f,%.0f %.0fx%.0f", edge, x, y, scale, r.X, r.Y, r.W, r.H))
+			return edge != resizeNone
 		}).
 		HandleInput(a.onResizeInput)
 	_ = resize
@@ -307,9 +316,13 @@ func (a *app) view(c *ui.Context) {
 }
 
 func (a *app) onDragInput(ev ui.InputEvent) bool {
+	if ev.Kind == ui.InputPointerDown || ev.Kind == ui.InputPointerUp || (ev.Kind == ui.InputPointerMove && a.dragging) {
+		a.debugPointer("stand", ev, ev.X, ev.Y, fmt.Sprintf("dragging=%v", a.dragging))
+	}
 	switch ev.Kind {
 	case ui.InputPointerDown:
 		if ev.Button != 0 {
+			dbg("stand down ignored button=%d", ev.Button)
 			return false
 		}
 		a.dragging = true
@@ -404,13 +417,19 @@ func (a *app) onResizeInput(ev ui.InputEvent) bool {
 		a.ptrX, a.ptrY = winX, winY
 		a.ptrSeen = true
 	}
+	edgeNow := hitResizeEdge(float64(winX), float64(winY), fx, fy, fw, fh, scale, a.setButtonRect(scale))
+	if ev.Kind == ui.InputPointerDown || ev.Kind == ui.InputPointerUp || ev.Kind == ui.InputPointerMove {
+		a.debugPointer("resize", ev, winX, winY, fmt.Sprintf("hit=%s resizing=%s start=%dx%d scale=%.4f", edgeNow, a.resizing, a.resizeStartW, a.resizeStartH, scale))
+	}
 	switch ev.Kind {
 	case ui.InputPointerDown:
 		if ev.Button != 0 {
+			dbg("resize down ignored button=%d hit=%s", ev.Button, edgeNow)
 			return false
 		}
-		edge := hitResizeEdge(float64(winX), float64(winY), fx, fy, fw, fh, scale, a.setButtonRect(scale))
+		edge := edgeNow
 		if edge == resizeNone {
+			dbg("resize down missed edge at win=%.1f,%.1f", winX, winY)
 			return false
 		}
 		a.dragging = false
@@ -424,6 +443,8 @@ func (a *app) onResizeInput(ev ui.InputEvent) bool {
 			a.resizeStartW, a.resizeStartH = WindowSize(scale)
 		}
 		a.resizeStartSX, a.resizeStartSY = a.pointerScreen(winX, winY)
+		dbg("resize down accepted edge=%s startWin=%dx%d@%d,%d pointerScreen=%d,%d",
+			edge, a.resizeStartW, a.resizeStartH, a.resizeStartX, a.resizeStartY, a.resizeStartSX, a.resizeStartSY)
 		return true
 	case ui.InputPointerMove:
 		if a.resizing == resizeNone {
@@ -436,8 +457,10 @@ func (a *app) onResizeInput(ev ui.InputEvent) bool {
 		return true
 	case ui.InputPointerUp:
 		if a.resizing == resizeNone {
+			dbg("resize up with no active drag canceled=%v", ev.Canceled)
 			return false
 		}
+		dbg("resize up edge=%s canceled=%v", a.resizing, ev.Canceled)
 		a.finishResize()
 		return true
 	default:
@@ -455,6 +478,7 @@ func (a *app) applyAnchoredScale(newScale float64) {
 	x, y := positionAfterResize(a.resizing, a.resizeStartX, a.resizeStartY, a.resizeStartW, a.resizeStartH, w, h)
 	a.win.SetSize(w, h)
 	a.win.SetPosition(x, y)
+	a.debugAfterSize("resize-drag", w, h, x, y)
 	a.keepWindowOnScreen()
 	a.applyHitRegion()
 }
@@ -463,7 +487,9 @@ func (a *app) finishResize() {
 	if a.resizing == resizeNone {
 		return
 	}
+	edge := a.resizing
 	a.resizing = resizeNone
+	dbg("finishResize edge=%s scale=%.4f", edge, a.settings.Scale)
 	a.applyTankScale()
 	a.persistSettings()
 }
@@ -478,6 +504,9 @@ func (a *app) ready() {
 	if err != nil {
 		log.Println("tray:", err)
 		a.tray = nil
+		dbg("NewTray failed: %v", err)
+	} else {
+		dbg("NewTray succeeded tray!=nil")
 	}
 
 	if dir, err := mygo.App.Path(mygo.PathUserData); err != nil {
@@ -507,10 +536,14 @@ func (a *app) ready() {
 		DisableShadow:     true,
 		Content:           ui.View(a.view),
 	})
+	a.debugWindowState("main window created")
 	a.win.OnClose(func(e *mygo.CloseEvent) {
+		dbg("main OnClose enter quitting=%v tray=%v goos=%s setWin=%s", a.quitting, a.tray != nil, runtime.GOOS, debugSetWinState(a))
+		a.debugWindowState("main OnClose")
 		if !a.quitting && a.tray != nil && runtime.GOOS != "linux" {
 			e.PreventDefault()
 			a.win.Hide()
+			dbg("main OnClose hid window (non-linux tray), preventDefault")
 			return
 		}
 		// On Linux a tray can be created even when the panel shows no
@@ -518,8 +551,16 @@ func (a *app) ready() {
 		// destroys the window and leaves the process (and the launching
 		// terminal) running with nothing to click.
 		if !a.quitting {
+			dbg("main OnClose calling quit()")
 			a.quit()
+			dbg("main OnClose quit() returned prevented=%v", e.DefaultPrevented())
+		} else {
+			dbg("main OnClose skipped quit; already quitting prevented=%v", e.DefaultPrevented())
 		}
+	})
+	a.win.OnClosed(func() {
+		dbg("main OnClosed destroyed=%v", a.win != nil && a.win.IsDestroyed())
+		a.debugWindowState("main OnClosed")
 	})
 	if dark, ok := tryThemeIsDark(); ok {
 		a.systemDark, a.systemDarkOK = dark, true
@@ -530,6 +571,7 @@ func (a *app) ready() {
 		}
 	})
 	a.win.OnBlur(func() {
+		dbg("main OnBlur resizing=%s dragging=%v", a.resizing, a.dragging)
 		a.feeder.Cancel()
 		a.dragging = false
 		a.finishResize()
@@ -564,7 +606,9 @@ func (a *app) applyTankScale() {
 		return
 	}
 	w, h := WindowSize(a.settings.Scale)
+	x, y := a.win.Position()
 	a.win.SetSize(w, h)
+	a.debugAfterSize("applyTankScale", w, h, x, y)
 	a.keepWindowOnScreen()
 	a.applyHitRegion()
 }
@@ -671,11 +715,17 @@ func (a *app) toggleClickThrough() {
 }
 
 func (a *app) quit() {
+	dbg("quit() enter setWin=%s", debugSetWinState(a))
+	a.debugWindowState("quit enter")
 	a.quitting = true
 	if a.setWin != nil {
+		dbg("quit() closing settings window destroyed=%v", a.setWin.IsDestroyed())
 		a.setWin.Close()
+		dbg("quit() settings Close() returned setWin=%s", debugSetWinState(a))
 	}
+	dbg("quit() calling App.Quit()")
 	mygo.App.Quit()
+	dbg("quit() App.Quit() returned")
 }
 
 func trayIcon() []byte {
@@ -694,12 +744,25 @@ func trayIcon() []byte {
 }
 
 func main() {
+	initDebugInput()
 	a := newApp()
 	mygo.App.SetName("小鱼缸")
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
+	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		dbg("App.OnBeforeQuit sessionEnding=%v alreadyAppQuittingFlag=%v", e.SessionEnding, a.quitting)
+		a.quitting = true
+	})
+	mygo.App.OnWillQuit(func(e *mygo.QuitEvent) {
+		dbg("App.OnWillQuit sessionEnding=%v preventable, currently prevented=%v setWin=%s", e.SessionEnding, e.DefaultPrevented(), debugSetWinState(a))
+	})
+	mygo.App.OnQuitCanceled(func() {
+		dbg("App.OnQuitCanceled — quit sequence was canceled")
+		a.debugWindowState("OnQuitCanceled")
+	})
 	mygo.App.WhenReady(a.ready)
+	dbg("App.Run starting")
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
+	dbg("App.Run returned")
 }

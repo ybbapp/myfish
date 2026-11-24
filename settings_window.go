@@ -103,13 +103,19 @@ func (a *app) openSettings() {
 		Content:           ui.View(a.settingsView),
 	})
 	a.setWin.OnClose(func(e *mygo.CloseEvent) {
+		dbg("settings OnClose enter quitting=%v visible=%v destroyed=%v", a.quitting, a.setWin != nil && !a.setWin.IsDestroyed() && a.setWin.IsVisible(), a.setWin != nil && a.setWin.IsDestroyed())
 		e.PreventDefault()
 		a.closeSettings()
+		dbg("settings OnClose hid window, preventDefault setWin=%s", debugSetWinState(a))
+	})
+	a.setWin.OnClosed(func() {
+		dbg("settings OnClosed (unexpected if PreventDefault holds)")
 	})
 }
 
 func (a *app) closeSettings() {
 	if a.setWin != nil {
+		dbg("closeSettings Hide() settingsOpen=%v", a.settingsOpen)
 		a.setWin.Hide()
 	}
 }
