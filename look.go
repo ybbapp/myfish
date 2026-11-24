@@ -31,6 +31,8 @@ var (
 	colorFeedHintHot = ui.RGBA(70, 140, 138, 0.70)
 	colorFeedLine    = ui.RGBA(190, 220, 228, 0.40)
 	colorFeedLineHot = ui.RGBA(210, 234, 240, 0.62)
+	colorFeedChip    = ui.RGBA(164, 222, 214, 0.82)
+	colorFeedChipHot = ui.RGBA(164, 222, 214, 0.95)
 	colorResizeHint  = ui.RGBA(210, 245, 255, 0.75)
 )
 
@@ -81,12 +83,27 @@ func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool, g GlassStyle, scal
 	slotX := gx - (slotW-gw)/2
 	p.Fill(ui.Rect{X: slotX, Y: by + s(2), W: slotW, H: s(3)}, colorStandDark, sw(1))
 
-	// Subtle hairline just above the plate marks the click-to-feed strip.
+	// A visible FEED chip in the strip above the plate. The previous
+	// hairline was easy to miss, especially at 35%; testers clicked the
+	// glass instead, and no food was dropped.
 	line := colorFeedLine
+	chip := colorFeedChip
 	if feedHot {
 		line = colorFeedLineHot
+		chip = colorFeedChipHot
 	}
 	p.Stroke(ui.Rect{X: s(pan.FX) + ox + s(8), Y: s(pan.FY+pan.FH) + oy - s(3), W: s(pan.FW) - s(16), H: s(1)}, line, sw(0.5), sw(1))
+	chipW, chipH := s(76), s(22)
+	if chipW < 52 {
+		chipW = 52
+	}
+	if chipH < 16 {
+		chipH = 16
+	}
+	cx := s(pan.FX) + ox + s(pan.FW)/2
+	cy := s(pan.FY) + oy + s(pan.FH)/2
+	p.Fill(ui.Rect{X: cx - chipW/2, Y: cy - chipH/2, W: chipW, H: chipH}, chip, sw(3))
+	p.Stroke(ui.Rect{X: cx - chipW/2, Y: cy - chipH/2, W: chipW, H: chipH}, colorStandDark, sw(3), sw(1))
 
 	top := &ui.Path{}
 	top.MoveTo(gx, gy)
@@ -147,24 +164,44 @@ func drawResizeHint(p *ui.Painter, fx, fy, fw, fh, scale float64, edge resizeEdg
 	if edge == resizeNone {
 		return
 	}
-	x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
+	_ = fx
+	_ = fy
+	_ = fw
+	_ = fh
+	g := visibleGlassRect(scale)
+	st := visibleStandRect(scale)
 	thick := float32(2)
 	if thick < 1.2 {
 		thick = 1.2
 	}
-	stroke := func(rx, ry, rw, rh float64) {
-		p.Stroke(ui.Rect{X: float32(rx), Y: float32(ry), W: float32(rw), H: float32(rh)}, colorResizeHint, 0, thick)
+	stroke := func(r rectWH, horiz bool, atEnd bool) {
+		if horiz {
+			y := r.Y
+			if atEnd {
+				y = r.Y + r.H
+			}
+			p.Stroke(ui.Rect{X: float32(r.X), Y: float32(y), W: float32(r.W), H: 0}, colorResizeHint, 0, thick)
+			return
+		}
+		x := r.X
+		if atEnd {
+			x = r.X + r.W
+		}
+		p.Stroke(ui.Rect{X: float32(x), Y: float32(r.Y), W: 0, H: float32(r.H)}, colorResizeHint, 0, thick)
 	}
 	if edge.hasN() {
-		stroke(x, y, w, 0)
+		stroke(g, true, false)
 	}
 	if edge.hasS() {
-		stroke(x, y+h, w, 0)
+		stroke(g, true, true)
+		stroke(st, true, true)
 	}
 	if edge.hasW() {
-		stroke(x, y, 0, h)
+		stroke(g, false, false)
+		stroke(st, false, false)
 	}
 	if edge.hasE() {
-		stroke(x+w, y, 0, h)
+		stroke(g, false, true)
+		stroke(st, false, true)
 	}
 }

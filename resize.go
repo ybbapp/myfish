@@ -96,22 +96,47 @@ func clampNonNeg(v float64) float64 {
 	return v
 }
 
-// resizeInwardHit is how far the handle reaches into the visible
-// chassis. It never covers the FEED mid or the stand mid.
+// resizeInwardHit is how far a handle reaches into a visible part
+// (the glass plate or the stand). The stand mid and FEED mid stay
+// free because those points are not on the part edges.
 func resizeInwardHit(scale float64) float64 {
+	_ = scale
+	return resizeEdgeHit
+}
+
+// visibleGlassRect is the window-space box of the plate the user sees,
+// including the 3D top lip and right-side thickness. This is the edge
+// people grab; it is inset from the stand, so a bounding box around
+// the whole chassis (used previously) misses the glass face.
+func visibleGlassRect(scale float64) rectWH {
 	s := clampScale(scale)
 	pan := tank.Layout(designW, designH)
-	fx, fy, fw, fh := pan.FrameBounds()
-	_, y, _, h := windowFrame(fx, fy, fw, fh, s)
-	feedMid := dipY(pan.FY+pan.FH/2, s)
-	standMid := dipY(pan.BY+(pan.BH+pan.LegH)/2, s)
-	topClear := feedMid - y - 2
-	botClear := y + h - standMid - 2
-	inward := math.Min(resizeEdgeHit, math.Min(topClear, botClear))
-	if inward < 3 {
-		return 3
+	top := pan.GY - pan.Thickness*0.35
+	if top < 0 {
+		top = 0
 	}
-	return inward
+	return rectWH{
+		X: dipX(pan.GX, s),
+		Y: dipY(top, s),
+		W: (pan.GW + pan.Thickness) * s,
+		H: (pan.GY + pan.GH - top) * s,
+	}
+}
+
+// visibleStandRect is the platform and legs in window space.
+func visibleStandRect(scale float64) rectWH {
+	s := clampScale(scale)
+	pan := tank.Layout(designW, designH)
+	return rectWH{
+		X: dipX(pan.BX, s),
+		Y: dipY(pan.BY, s),
+		W: pan.BW * s,
+		H: (pan.BH + pan.LegH) * s,
+	}
+}
+
+func productionPanel() tank.Panel {
+	return tank.Layout(designW, designH)
 }
 
 // resizeHandlePads returns the outward depth (kept outside the native
@@ -132,72 +157,128 @@ func resizeHandlePads(fx, fy, fw, fh, scale float64) (outward, inward, cornerAlo
 	return outward, inward, cornerAlong
 }
 
-// feedHitRect is the window-space click target for FEED. At small
-// scales the visual strip is shorter than a comfortable tap, so the
-// box grows downward (it may slightly overlap the top of the glass)
-// starting just below the top resize band. The tank face itself is not
-// stretched.
+// feedHitRect is the window-space click target for FEED. The visual
+// strip can be shorter than a comfortable tap at 35%, so the box may
+// grow downward slightly into the gap above the glass. The plate
+// itself is not stretched. North resize uses the glass top and the
+// pad above FEED, not the strip interior, so the mid of FEED stays
+// a feed click.
 func feedHitRect(pan tank.Panel, scale float64) rectWH {
 	s := clampScale(scale)
-	_, fy, _, _ := pan.FrameBounds()
-	frameTop := dipY(fy, s)
-	inward := resizeInwardHit(s)
 	visX := dipX(pan.FX, s)
 	visW := pan.FW * s
 	visTop := dipY(pan.FY, s)
 	visBot := visTop + pan.FH*s
-	top := math.Max(visTop, frameTop+inward)
-	h := visBot - top
+	h := visBot - visTop
 	if h < minFeedHitH {
 		h = minFeedHitH
 	}
-	return rectWH{X: visX, Y: top, W: visW, H: h}
+	// Do not cover the glass top lip: that visible edge must stay a
+	// north resize handle, and at 35% a 24 DIP feed box would swallow it.
+	glassTop := visibleGlassRect(s).Y
+	if visTop+h > glassTop-1 && glassTop-1 > visTop {
+		h = glassTop - 1 - visTop
+	}
+	return rectWH{X: visX, Y: visTop, W: visW, H: h}
 }
 
-// hitResizeEdge reports which frame edge or corner (wx, wy) is on, in
-// window DIPs. exclude (typically SET) wins over a resize handle.
-func hitResizeEdge(wx, wy, fx, fy, fw, fh, scale float64, exclude rectWH) resizeEdge {
-	if exclude.contains(wx, wy) {
-		return resizeNone
+type edgeHit struct {
+	n, s, e, w     bool
+	cn, cs, ce, cw bool
+}
+
+func (h *edgeHit) add(o edgeHit) {
+	h.n, h.s, h.e, h.w = h.n || o.n, h.s || o.s, h.e || o.e, h.w || o.w
+	h.cn, h.cs, h.ce, h.cw = h.cn || o.cn, h.cs || o.cs, h.ce || o.ce, h.cw || o.cw
+}
+
+func (h edgeHit) edge() resizeEdge {
+	// The plate sits on the stand: glass south and stand north are the
+	// same visible seam. Treat it as a south handle, not a canceling
+	// N+S pair or a false NE/NW on the stand top.
+	if h.n && h.s {
+		h.n, h.cn = false, false
 	}
-	x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
-	if w <= 0 || h <= 0 {
-		return resizeNone
+	if h.e && h.w {
+		h.w, h.cw = false, false
 	}
-	outward, inward, cornerAlong := resizeHandlePads(fx, fy, fw, fh, scale)
-	if wx < x-outward || wy < y-outward || wx > x+w+outward || wy > y+h+outward {
-		return resizeNone
-	}
-	nearW := wx >= x-outward && wx <= x+inward
-	nearE := wx >= x+w-inward && wx <= x+w+outward
-	nearN := wy >= y-outward && wy <= y+inward
-	nearS := wy >= y+h-inward && wy <= y+h+outward
-	// Corners are wider along the edge, but no deeper than the edge
-	// band, so they cannot cover FEED or the stand mid at 35%.
-	nearCW := wx >= x-outward && wx <= x+cornerAlong
-	nearCE := wx >= x+w-cornerAlong && wx <= x+w+outward
-	nearCN := wy >= y-outward && wy <= y+inward
-	nearCS := wy >= y+h-inward && wy <= y+h+outward
 	switch {
-	case nearCW && nearCN:
+	case h.cw && h.cn:
 		return resizeNW
-	case nearCE && nearCN:
+	case h.ce && h.cn:
 		return resizeNE
-	case nearCW && nearCS:
+	case h.cw && h.cs:
 		return resizeSW
-	case nearCE && nearCS:
+	case h.ce && h.cs:
 		return resizeSE
-	case nearN && wx >= x && wx <= x+w:
+	case h.n:
 		return resizeN
-	case nearS && wx >= x && wx <= x+w:
+	case h.s:
 		return resizeS
-	case nearW && wy >= y && wy <= y+h:
+	case h.w:
 		return resizeW
-	case nearE && wy >= y && wy <= y+h:
+	case h.e:
 		return resizeE
 	default:
 		return resizeNone
 	}
+}
+
+// hitRectEdge reports edge proximity to one visible rectangle.
+// inwardN of 0 means that side only accepts outward grabs (used for
+// the pad above the FEED strip so the strip itself stays a feed click).
+func hitRectEdge(wx, wy float64, r rectWH, outward, cornerAlong, inwardN, inwardS, inwardE, inwardW float64) edgeHit {
+	var h edgeHit
+	if r.W <= 0 {
+		return h
+	}
+	x, y, w, ht := r.X, r.Y, r.W, r.H
+	if ht < 0 {
+		ht = 0
+	}
+	if wx < x-outward || wy < y-outward || wx > x+w+outward || wy > y+ht+outward {
+		return h
+	}
+	h.w = wx >= x-outward && wx <= x+inwardW && wy >= y && wy <= y+ht
+	h.e = wx >= x+w-inwardE && wx <= x+w+outward && wy >= y && wy <= y+ht
+	h.n = wy >= y-outward && wy <= y+inwardN && wx >= x && wx <= x+w
+	h.s = wy >= y+ht-inwardS && wy <= y+ht+outward && wx >= x && wx <= x+w
+	h.cw = wx >= x-outward && wx <= x+cornerAlong
+	h.ce = wx >= x+w-cornerAlong && wx <= x+w+outward
+	h.cn = wy >= y-outward && wy <= y+inwardN
+	h.cs = wy >= y+ht-inwardS && wy <= y+ht+outward
+	// A corner requires both axis bands; drop a lone corner flag.
+	if !(h.cw && h.cn) && !(h.ce && h.cn) && !(h.cw && h.cs) && !(h.ce && h.cs) {
+		h.cw, h.ce, h.cn, h.cs = false, false, false, false
+	}
+	return h
+}
+
+// hitResizeEdge reports which visible chassis edge or corner (wx, wy)
+// is on, in window DIPs. The user-facing target is the glass plate
+// (front face plus thickness) and the stand, not the stand-wide
+// bounding box. exclude (typically SET) and the FEED hit box win over
+// a resize handle. fx,fy,fw,fh remain the overall chassis box and are
+// used only for pad clearance against the native inset.
+func hitResizeEdge(wx, wy, fx, fy, fw, fh, scale float64, exclude rectWH) resizeEdge {
+	if exclude.contains(wx, wy) {
+		return resizeNone
+	}
+	s := clampScale(scale)
+	pan := productionPanel()
+	if feedHitRect(pan, s).contains(wx, wy) {
+		return resizeNone
+	}
+	outward, inward, cornerAlong := resizeHandlePads(fx, fy, fw, fh, s)
+	var acc edgeHit
+	acc.add(hitRectEdge(wx, wy, visibleGlassRect(s), outward, cornerAlong, inward, inward, inward, inward))
+	acc.add(hitRectEdge(wx, wy, visibleStandRect(s), outward, cornerAlong, inward, inward, inward, inward))
+	// The pad above FEED is a north handle only (no inward bite into
+	// the strip). This lets a user grab the top of the widget without
+	// fighting the FEED label.
+	feed := rectWH{X: dipX(pan.FX, s), Y: dipY(pan.FY, s), W: pan.FW * s, H: 0}
+	acc.add(hitRectEdge(wx, wy, feed, outward, cornerAlong, 0, 0, 0, 0))
+	return acc.edge()
 }
 
 // scaleFromResizeDrag maps a screen-space pointer delta to a new scale.

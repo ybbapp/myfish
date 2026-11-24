@@ -335,11 +335,9 @@ func TestSettingsScaleSliderAndRestore(t *testing.T) {
 func TestViewEastEdgeHoverAndDragUpdatesScale(t *testing.T) {
 	a := newApp()
 	start := a.settings.ClampedScale()
-	pan := a.tank.Panel
-	fx, fy, fw, fh := pan.FrameBounds()
-	x, y, w, h := windowFrame(fx, fy, fw, fh, start)
+	g := visibleGlassRect(start)
 	tt := testView(a)
-	ex, ey := float32(x+w), float32(y+h/2)
+	ex, ey := float32(g.X+g.W), float32(g.Y+g.H/2)
 	tt.Move(ex, ey)
 	if tt.Cursor() != ui.CursorResizeE {
 		t.Fatalf("east edge cursor=%v want CursorResizeE", tt.Cursor())
@@ -373,11 +371,10 @@ func TestViewFeedAndStandStayDistinctFromResize(t *testing.T) {
 	a := newApp()
 	a.tank.Foods = nil
 	pan := a.tank.Panel
-	fx, fy, fw, fh := pan.FrameBounds()
 	scale := a.settings.ClampedScale()
-	x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
+	g := visibleGlassRect(scale)
 	tt := testView(a)
-	tt.ClickAt(float32(x+w), float32(y+h/2))
+	tt.ClickAt(float32(g.X+g.W), float32(g.Y+g.H/2))
 	if len(a.tank.Foods) != 0 {
 		t.Fatalf("clicking the east resize edge dropped food: %+v", a.tank.Foods)
 	}

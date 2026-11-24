@@ -7,47 +7,49 @@ import (
 
 func TestHitResizeEdgesAndCorners(t *testing.T) {
 	scale := defaultScale
-	fx, fy, fw, fh := 24.0, 8.0, 372.0, 456.0
-	x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
+	pan := productionPanel()
+	fx, fy, fw, fh := pan.FrameBounds()
+	g := visibleGlassRect(scale)
 	none := rectWH{}
 	cases := []struct {
 		name   string
 		wx, wy float64
 		want   resizeEdge
 	}{
-		{"inside", x + w/2, y + h/2, resizeNone},
-		{"n mid", x + w/2, y, resizeN},
-		{"s mid", x + w/2, y + h, resizeS},
-		{"w mid", x, y + h/2, resizeW},
-		{"e mid", x + w, y + h/2, resizeE},
-		{"nw", x, y, resizeNW},
-		{"ne", x + w, y, resizeNE},
-		{"sw", x, y + h, resizeSW},
-		{"se", x + w, y + h, resizeSE},
-		{"outside pad", x + w/2, y - resizeEdgeHit - 1, resizeNone},
-		{"outward n still hits", x + w/2, y - resizeEdgeHit + 0.5, resizeN},
+		{"glass inside", g.X + g.W/2, g.Y + g.H/2, resizeNone},
+		{"glass n mid", g.X + g.W/2, g.Y, resizeN},
+		{"glass s mid", g.X + g.W/2, g.Y + g.H, resizeS},
+		{"glass w mid", g.X, g.Y + g.H/2, resizeW},
+		{"glass e mid", g.X + g.W, g.Y + g.H/2, resizeE},
+		{"glass front right (visible face)", dipX(pan.GX+pan.GW, scale), g.Y + g.H/2, resizeE},
+		{"glass nw", g.X, g.Y, resizeNW},
+		{"glass ne", g.X + g.W, g.Y, resizeNE},
+		{"glass sw", g.X, g.Y + g.H, resizeSW},
+		{"glass se", g.X + g.W, g.Y + g.H, resizeSE},
+		{"outside pad", g.X + g.W/2, g.Y - resizeEdgeHit - 1, resizeNone},
+		{"on glass top lip", g.X + g.W/2, g.Y + 0.5, resizeN},
+		{"pad above FEED", dipX(productionPanel().FX+productionPanel().FW/2, scale), dipY(productionPanel().FY, scale) - resizeEdgeHit + 0.5, resizeN},
 	}
 	for _, tc := range cases {
 		if got := hitResizeEdge(tc.wx, tc.wy, fx, fy, fw, fh, scale, none); got != tc.want {
-			t.Fatalf("%s: got %s want %s", tc.name, got, tc.want)
+			t.Fatalf("%s: got %s want %s at %.1f,%.1f glass=%+v", tc.name, got, tc.want, tc.wx, tc.wy, g)
 		}
 	}
 }
 
 func TestHitResizeExcludesSetButton(t *testing.T) {
 	scale := minScale
-	fx, fy, fw, fh := 24.0, 8.0, 372.0, 456.0
-	x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
-	set := rectWH{X: x + w - 16, Y: y + h - 16, W: 20, H: 20}
-	wx, wy := set.X+4, set.Y+4
-	if got := hitResizeEdge(wx, wy, fx, fy, fw, fh, scale, set); got != resizeNone {
+	a := newApp()
+	pan := a.tank.Panel
+	fx, fy, fw, fh := pan.FrameBounds()
+	g := visibleGlassRect(scale)
+	set := a.setButtonRect(scale)
+	cx, cy := set.X+set.W/2, set.Y+set.H/2
+	if got := hitResizeEdge(cx, cy, fx, fy, fw, fh, scale, set); got != resizeNone {
 		t.Fatalf("SET should win over resize, got %s", got)
 	}
-	if got := hitResizeEdge(x+w, y+h, fx, fy, fw, fh, scale, set); got != resizeNone {
-		t.Fatalf("corner under SET should not resize, got %s", got)
-	}
-	// Mid-right edge above SET stays a resize handle.
-	if got := hitResizeEdge(x+w, y+h/2, fx, fy, fw, fh, scale, set); got != resizeE {
+	// Mid-right glass edge, away from SET, stays a resize handle.
+	if got := hitResizeEdge(g.X+g.W, g.Y+g.H/2, fx, fy, fw, fh, scale, set); got != resizeE {
 		t.Fatalf("free E edge: got %s", got)
 	}
 }
@@ -200,26 +202,23 @@ func TestMinScaleKeepsFeedSetAndEdgesUsable(t *testing.T) {
 		t.Fatalf("FEED mid at 35%% is %s, want none", got)
 	}
 	hit := feedHitRect(pan, scale)
-	if hit.H < minFeedHitH {
-		t.Fatalf("FEED hit height %.1f, want at least %.0f", hit.H, minFeedHitH)
-	}
 	if !hit.contains(feedMidX, feedMidY) {
 		t.Fatalf("FEED hit %+v does not contain mid %.1f,%.1f", hit, feedMidX, feedMidY)
 	}
-	x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
-	inward := resizeInwardHit(scale)
-	if hit.Y < y+inward-0.01 {
-		t.Fatalf("FEED hit top %.1f overlaps the inward resize band ending at %.1f", hit.Y, y+inward)
+	if hit.H < pan.FH*scale-0.1 {
+		t.Fatalf("FEED hit height %.1f is smaller than the visual strip %.1f", hit.H, pan.FH*scale)
 	}
-	if got := hitResizeEdge(x+w/2, y, fx, fy, fw, fh, scale, rectWH{}); got != resizeN {
-		t.Fatalf("top edge mid at 35%% is %s, want n", got)
+	g := visibleGlassRect(scale)
+	if got := hitResizeEdge(g.X+g.W/2, g.Y, fx, fy, fw, fh, scale, rectWH{}); got != resizeN {
+		t.Fatalf("glass top mid at 35%% is %s, want n", got)
 	}
 	outward, _, _ := resizeHandlePads(fx, fy, fw, fh, scale)
-	if got := hitResizeEdge(x+w/2, y-outward+0.5, fx, fy, fw, fh, scale, rectWH{}); got != resizeN {
-		t.Fatalf("outward top pad at 35%% is %s, want n", got)
+	feedTop := dipY(pan.FY, scale)
+	if got := hitResizeEdge(feedMidX, feedTop-outward+0.5, fx, fy, fw, fh, scale, rectWH{}); got != resizeN {
+		t.Fatalf("pad above FEED at 35%% is %s, want n", got)
 	}
-	if y-outward < float64(nativeResizeInset) {
-		t.Fatalf("outward top handle at %.1f enters the %d DIP native inset", y-outward, nativeResizeInset)
+	if feedTop-outward < float64(nativeResizeInset) {
+		t.Fatalf("outward top handle at %.1f enters the %d DIP native inset", feedTop-outward, nativeResizeInset)
 	}
 	set := a.setButtonRect(scale)
 	if set.W < minSetW || set.H < minSetH {
@@ -234,7 +233,68 @@ func TestMinScaleKeepsFeedSetAndEdgesUsable(t *testing.T) {
 		t.Fatalf("stand mid at 35%% is %s, want none", got)
 	}
 	// A side edge mid, away from SET, remains a resize handle.
-	if got := hitResizeEdge(x, y+h/2, fx, fy, fw, fh, scale, set); got != resizeW {
+	if got := hitResizeEdge(g.X, g.Y+g.H/2, fx, fy, fw, fh, scale, set); got != resizeW {
 		t.Fatalf("free W edge at 35%% is %s, want w", got)
+	}
+}
+
+func TestLoggedVisibleGlassEdgeResizes(t *testing.T) {
+	// Exact window-space points from myfish-input-6f74c44-gui.log at 75%:
+	// the tester grabbed the visible glass right edge and SE corner,
+	// hitResizeEdge returned none because the handle used the stand-wide
+	// bounding box (east band started at ~319, glass face is at ~312).
+	scale := defaultScale
+	pan := productionPanel()
+	fx, fy, fw, fh := pan.FrameBounds()
+	none := rectWH{}
+	if got := hitResizeEdge(312, 195, fx, fy, fw, fh, scale, none); got != resizeE {
+		t.Fatalf("logged visible right edge 312,195 is %s, want e (glass front right=%.2f)", got, dipX(pan.GX+pan.GW, scale))
+	}
+	if got := hitResizeEdge(312, 331, fx, fy, fw, fh, scale, none); got != resizeSE && got != resizeE && got != resizeS {
+		t.Fatalf("logged visible SE 312,331 is %s, want se (or e/s)", got)
+	}
+	// Prefer the true corner classification.
+	if got := hitResizeEdge(312, 331, fx, fy, fw, fh, scale, none); got != resizeSE {
+		t.Fatalf("logged visible SE 312,331 is %s, want se", got)
+	}
+}
+
+func TestVisibleGlassEdgesAtMinScale(t *testing.T) {
+	scale := minScale
+	pan := productionPanel()
+	fx, fy, fw, fh := pan.FrameBounds()
+	g := visibleGlassRect(scale)
+	none := rectWH{}
+	if got := hitResizeEdge(g.X+g.W, g.Y+g.H/2, fx, fy, fw, fh, scale, none); got != resizeE {
+		t.Fatalf("35%% glass right is %s, want e at x=%.1f", got, g.X+g.W)
+	}
+	front := dipX(pan.GX+pan.GW, scale)
+	if got := hitResizeEdge(front, g.Y+g.H/2, fx, fy, fw, fh, scale, none); got != resizeE {
+		t.Fatalf("35%% glass front right %.1f is %s, want e", front, got)
+	}
+	if got := hitResizeEdge(g.X+g.W, g.Y+g.H, fx, fy, fw, fh, scale, none); got != resizeSE {
+		t.Fatalf("35%% glass SE is %s, want se", got)
+	}
+	// Glass interior must not resize.
+	if got := hitResizeEdge(g.X+g.W/2, g.Y+g.H/2, fx, fy, fw, fh, scale, none); got != resizeNone {
+		t.Fatalf("35%% glass mid is %s, want none", got)
+	}
+}
+
+func TestFeedMidStillFeedsNotResize(t *testing.T) {
+	pan := productionPanel()
+	fx, fy, fw, fh := pan.FrameBounds()
+	for _, scale := range []float64{minScale, 0.55, defaultScale, maxScale} {
+		wx, wy := dipX(pan.FX+pan.FW/2, scale), dipY(pan.FY+pan.FH/2, scale)
+		if got := hitResizeEdge(wx, wy, fx, fy, fw, fh, scale, rectWH{}); got != resizeNone {
+			t.Fatalf("FEED mid at %.2f is %s, want none", scale, got)
+		}
+		hit := feedHitRect(pan, scale)
+		if !hit.contains(wx, wy) {
+			t.Fatalf("FEED mid at %.2f not in hit box %+v", scale, hit)
+		}
+		if hit.H < pan.FH*scale-0.1 {
+			t.Fatalf("FEED hit height %.1f at %.2f is smaller than the visual strip", hit.H, scale)
+		}
 	}
 }

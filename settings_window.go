@@ -102,15 +102,29 @@ func (a *app) openSettings() {
 		AlwaysOnTop:       true,
 		Content:           ui.View(a.settingsView),
 	})
-	a.setWin.OnClose(func(e *mygo.CloseEvent) {
-		dbg("settings OnClose enter quitting=%v visible=%v destroyed=%v", a.quitting, a.setWin != nil && !a.setWin.IsDestroyed() && a.setWin.IsVisible(), a.setWin != nil && a.setWin.IsDestroyed())
-		e.PreventDefault()
-		a.closeSettings()
-		dbg("settings OnClose hid window, preventDefault setWin=%s", debugSetWinState(a))
-	})
-	a.setWin.OnClosed(func() {
-		dbg("settings OnClosed (unexpected if PreventDefault holds)")
-	})
+	a.setWin.OnClose(a.onSettingsClose)
+	a.setWin.OnClosed(a.onSettingsClosed)
+}
+
+// onSettingsClose hides the settings window when the user closes it, but
+// must not cancel a process-wide quit. The 6f74c44 GUI log showed
+// PreventDefault here making App.Quit return OnQuitCanceled while the
+// hidden settings window stayed in the window list.
+func (a *app) onSettingsClose(e *mygo.CloseEvent) {
+	dbg("settings OnClose enter quitting=%v setWin=%s", a.quitting, debugSetWinState(a))
+	if a.quitting {
+		dbg("settings OnClose allowing destroy during quit")
+		return
+	}
+	e.PreventDefault()
+	a.closeSettings()
+	dbg("settings OnClose hid window, preventDefault setWin=%s", debugSetWinState(a))
+}
+
+func (a *app) onSettingsClosed() {
+	dbg("settings OnClosed")
+	a.setWin = nil
+	a.settingsOpen = false
 }
 
 func (a *app) closeSettings() {
