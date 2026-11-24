@@ -9,19 +9,21 @@ import (
 
 const (
 	MaxFood     = 8
+	FishCount   = 3
 	maxStep     = 1.0 / 20.0 // cap dt so a stall does not fling the fish
 	minStep     = 1.0 / 1000.0
-	eatRadius   = 22.0
+	eatRadius   = 32.0
 	foodFall    = 70.0
 	bubbleRise  = 36.0
 	wanderSpeed = 52.0
 	chaseSpeed  = 115.0
 	margin      = 16.0
-	chompLife   = 0.85
-	fishW       = 86.0
-	fishH       = 22.0
-	foodW       = 14.0
-	foodH       = 16.0
+	chompLife   = 1.35 // long enough to notice on a screenshot
+	fishW       = 120.0
+	fishH       = 32.0
+	foodW       = 20.0
+	foodH       = 22.0
+	minFishGap  = 96.0
 )
 
 // SpriteRight and SpriteLeft are monospaced character fish.
@@ -31,8 +33,9 @@ const (
 	FoodGlyph   = "*"
 )
 
-// Fish is the swimmer in the tank.
+// Fish is one swimmer in the tank.
 type Fish struct {
+	ID       int
 	X, Y     float64
 	VX, VY   float64
 	Facing   float64 // +1 right, -1 left
@@ -69,7 +72,7 @@ type Chomp struct {
 // Tank holds the simulation state.
 type Tank struct {
 	W, H    float64
-	Fish    Fish
+	Fishes  []Fish
 	Foods   []Food
 	Bubbles []Bubble
 	Chomps  []Chomp
@@ -79,15 +82,25 @@ type Tank struct {
 	bites   int
 }
 
-// New returns a tank of the given size, with one fish and a few bubbles.
+// New returns a tank of the given size, with several scattered fish and a
+// few bubbles.
 func New(w, h float64, seed int64) *Tank {
 	t := &Tank{W: w, H: h, rng: rand.New(rand.NewSource(seed))}
-	t.Fish = Fish{
-		X:      w * 0.35,
-		Y:      h * 0.45,
-		Facing: 1,
+	starts := [][3]float64{
+		{0.16, 0.26, 1},
+		{0.58, 0.50, -1},
+		{0.30, 0.74, 1},
 	}
-	t.pickWanderTarget()
+	for _, s := range starts {
+		t.nextID++
+		t.Fishes = append(t.Fishes, Fish{
+			ID:     t.nextID,
+			X:      clamp(w*s[0], margin, math.Max(margin, w-margin-fishW)),
+			Y:      clamp(h*s[1], margin, math.Max(margin, h-margin-fishH)),
+			Facing: s[2],
+		})
+		t.pickWanderTarget(len(t.Fishes) - 1)
+	}
 	for i := 0; i < 7; i++ {
 		t.spawnBubble(true)
 	}
@@ -103,7 +116,9 @@ func (t *Tank) Resize(w, h float64) {
 		h = 80
 	}
 	t.W, t.H = w, h
-	t.clampFish()
+	for i := range t.Fishes {
+		t.clampFish(i)
+	}
 	for i := range t.Foods {
 		t.Foods[i].X = clamp(t.Foods[i].X, margin, t.W-margin)
 	}
@@ -120,7 +135,6 @@ func (t *Tank) Step(dt float64) {
 	}
 	t.Time += dt
 
-	// Food falls and leaves at the bottom.
 	alive := t.Foods[:0]
 	for _, f := range t.Foods {
 		f.Y += foodFall * dt
@@ -131,19 +145,21 @@ func (t *Tank) Step(dt float64) {
 	clear(t.Foods[len(alive):])
 	t.Foods = alive
 
-	t.stepFish(dt)
+	for i := range t.Fishes {
+		t.stepFish(i, dt)
+	}
+	t.separateFish(dt)
 	t.stepBubbles(dt)
 	t.stepChomps(dt)
 
-	// Occasional new bubbles, by the clock, not by frame count.
 	if t.rng.Float64() < dt*1.3 && len(t.Bubbles) < 14 {
 		t.spawnBubble(false)
 	}
 }
 
-func (t *Tank) stepFish(dt float64) {
-	f := &t.Fish
-	tx, ty, chasing := t.nearestFood()
+func (t *Tank) stepFish(i int, dt float64) {
+	f := &t.Fishes[i]
+	tx, ty, chasing := t.nearestFood(i)
 	speed := wanderSpeed
 	if chasing {
 		speed = chaseSpeed
@@ -151,7 +167,7 @@ func (t *Tank) stepFish(dt float64) {
 	} else {
 		f.Retarget -= dt
 		if f.Retarget <= 0 {
-			t.pickWanderTarget()
+			t.pickWanderTarget(i)
 		}
 	}
 	dx := f.TargetX - (f.X + fishW/2)
@@ -170,10 +186,36 @@ func (t *Tank) stepFish(dt float64) {
 			f.Facing = -1
 		}
 	}
-	t.clampFish()
+	t.clampFish(i)
 
 	if chasing && dist < eatRadius {
-		t.eatNearest()
+		t.eatNearest(i)
+	}
+}
+
+func (t *Tank) separateFish(dt float64) {
+	if dt <= 0 {
+		return
+	}
+	nudge := 40 * dt
+	for i := 0; i < len(t.Fishes); i++ {
+		axi, ayi := t.Fishes[i].X+fishW/2, t.Fishes[i].Y+fishH/2
+		for j := i + 1; j < len(t.Fishes); j++ {
+			axj, ayj := t.Fishes[j].X+fishW/2, t.Fishes[j].Y+fishH/2
+			dx, dy := axi-axj, ayi-ayj
+			d := math.Hypot(dx, dy)
+			if d >= minFishGap || d < 0.5 {
+				continue
+			}
+			nx, ny := dx/d, dy/d
+			push := (minFishGap - d) * nudge / minFishGap
+			t.Fishes[i].X += nx * push
+			t.Fishes[i].Y += ny * push
+			t.Fishes[j].X -= nx * push
+			t.Fishes[j].Y -= ny * push
+			t.clampFish(i)
+			t.clampFish(j)
+		}
 	}
 }
 
@@ -216,16 +258,17 @@ func (t *Tank) DropFood(x, y float64) bool {
 	return true
 }
 
-func (t *Tank) nearestFood() (x, y float64, ok bool) {
-	if len(t.Foods) == 0 {
+func (t *Tank) nearestFood(i int) (x, y float64, ok bool) {
+	if i < 0 || i >= len(t.Fishes) || len(t.Foods) == 0 {
 		return 0, 0, false
 	}
-	fx := t.Fish.X + fishW/2
-	fy := t.Fish.Y + fishH/2
+	f := t.Fishes[i]
+	fx := f.X + fishW/2
+	fy := f.Y + fishH/2
 	best := 0
 	bestD := math.MaxFloat64
-	for i, f := range t.Foods {
-		d := math.Hypot(f.X-fx, f.Y-fy)
+	for i, food := range t.Foods {
+		d := math.Hypot(food.X-fx, food.Y-fy)
 		if d < bestD {
 			bestD = d
 			best = i
@@ -234,48 +277,50 @@ func (t *Tank) nearestFood() (x, y float64, ok bool) {
 	return t.Foods[best].X, t.Foods[best].Y, true
 }
 
-func (t *Tank) eatNearest() {
-	_, _, ok := t.nearestFood()
-	if !ok {
+func (t *Tank) eatNearest(i int) {
+	if i < 0 || i >= len(t.Fishes) || len(t.Foods) == 0 {
 		return
 	}
-	fx := t.Fish.X + fishW/2
-	fy := t.Fish.Y + fishH/2
+	f := &t.Fishes[i]
+	fx := f.X + fishW/2
+	fy := f.Y + fishH/2
 	best := 0
 	bestD := math.MaxFloat64
-	for i, f := range t.Foods {
-		d := math.Hypot(f.X-fx, f.Y-fy)
+	for j, food := range t.Foods {
+		d := math.Hypot(food.X-fx, food.Y-fy)
 		if d < bestD {
 			bestD = d
-			best = i
+			best = j
 		}
 	}
-	food := t.Foods[best]
 	t.Foods = append(t.Foods[:best], t.Foods[best+1:]...)
 	t.bites++
 	text := "chomp"
 	if t.bites%2 == 0 {
 		text = "gulp"
 	}
-	mouthX := t.Fish.X + fishW
-	if t.Fish.Facing < 0 {
-		mouthX = t.Fish.X
+	mouthX := f.X + fishW
+	if f.Facing < 0 {
+		mouthX = f.X
 	}
 	t.nextID++
 	t.Chomps = append(t.Chomps, Chomp{
 		ID:   t.nextID,
 		X:    mouthX,
-		Y:    t.Fish.Y - 4,
+		Y:    f.Y - 6,
 		Text: text,
 		Life: chompLife,
 	})
-	_ = food
 }
 
-func (t *Tank) pickWanderTarget() {
-	t.Fish.TargetX = margin + fishW/2 + t.rng.Float64()*(t.W-2*margin-fishW)
-	t.Fish.TargetY = margin + fishH/2 + t.rng.Float64()*(t.H-2*margin-fishH)
-	t.Fish.Retarget = 1.4 + t.rng.Float64()*2.2
+func (t *Tank) pickWanderTarget(i int) {
+	if i < 0 || i >= len(t.Fishes) {
+		return
+	}
+	f := &t.Fishes[i]
+	f.TargetX = margin + fishW/2 + t.rng.Float64()*(t.W-2*margin-fishW)
+	f.TargetY = margin + fishH/2 + t.rng.Float64()*(t.H-2*margin-fishH)
+	f.Retarget = 1.4 + t.rng.Float64()*2.2
 }
 
 func (t *Tank) spawnBubble(anywhere bool) {
@@ -284,7 +329,8 @@ func (t *Tank) spawnBubble(anywhere bool) {
 	if anywhere {
 		y = t.rng.Float64() * t.H
 	}
-	glyphs := []string{".", "o", "O", "°"}
+	// Skip "." — it vanishes on a light desktop.
+	glyphs := []string{"o", "O", "°"}
 	t.Bubbles = append(t.Bubbles, Bubble{
 		ID:     t.nextID,
 		X:      margin + t.rng.Float64()*math.Max(1, t.W-2*margin),
@@ -296,21 +342,35 @@ func (t *Tank) spawnBubble(anywhere bool) {
 	})
 }
 
-func (t *Tank) clampFish() {
-	t.Fish.X = clamp(t.Fish.X, margin, math.Max(margin, t.W-margin-fishW))
-	t.Fish.Y = clamp(t.Fish.Y, margin, math.Max(margin, t.H-margin-fishH))
+func (t *Tank) clampFish(i int) {
+	if i < 0 || i >= len(t.Fishes) {
+		return
+	}
+	t.Fishes[i].X = clamp(t.Fishes[i].X, margin, math.Max(margin, t.W-margin-fishW))
+	t.Fishes[i].Y = clamp(t.Fishes[i].Y, margin, math.Max(margin, t.H-margin-fishH))
 }
 
-// Sprite returns the facing-appropriate fish characters.
-func (t *Tank) Sprite() string {
-	if t.Fish.Facing < 0 {
+// Sprite returns the facing-appropriate characters for fish i.
+func (t *Tank) Sprite(i int) string {
+	if i < 0 || i >= len(t.Fishes) {
+		return SpriteRight
+	}
+	return t.Fishes[i].Sprite()
+}
+
+// Sprite returns the facing-appropriate characters for this fish.
+func (f Fish) Sprite() string {
+	if f.Facing < 0 {
 		return SpriteLeft
 	}
 	return SpriteRight
 }
 
-// FishSize is the drawing box of the fish, in DIPs.
+// FishSize is the drawing box of one fish, in DIPs.
 func FishSize() (w, h float64) { return fishW, fishH }
+
+// ChompLife is how long a bite label stays visible, in seconds.
+func ChompLife() float64 { return chompLife }
 
 func clamp(v, lo, hi float64) float64 {
 	if v < lo {
