@@ -4,7 +4,7 @@
 # Windows: official MyGo NSIS Setup.exe, then install / start / uninstall
 #   on windows-latest (amd64). arm64 Setup is built but not installed here.
 # Artifacts are uploaded for a later preview release decision.
-# Windows amd64 also upgrades from the published preview.3 Setup and
+# Windows amd64 also upgrades from the published preview.4 Setup and
 # checks that %AppData%\小鱼缸\settings.json and the install path are kept.
 # This workflow does not create or overwrite GitHub Releases or tags.
 name: Packaging
@@ -109,7 +109,7 @@ jobs:
           Write-Host "amd64=$($amd.FullName) size=$($amd.Length)"
           Write-Host "arm64=$($arm.FullName) size=$($arm.Length)"
           "SETUP_AMD64=$($amd.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Upgrade preview.3, start, and uninstall amd64 Setup
+      - name: Upgrade preview.4, start, and uninstall amd64 Setup
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -120,14 +120,14 @@ jobs:
           $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\小鱼缸.lnk'
           $dataDir = Join-Path $env:APPDATA '小鱼缸'
           $settings = Join-Path $dataDir 'settings.json'
-          $prev = Join-Path $env:RUNNER_TEMP 'myfish-setup-0.1.0-preview.3-amd64.exe'
-          $prevUrl = 'https://github.com/ybbapp/myfish/releases/download/v0.1.0-preview.3/myfish-setup-0.1.0-amd64.exe'
-          Write-Host "Downloading preview.3 Setup from $prevUrl"
+          $prev = Join-Path $env:RUNNER_TEMP 'myfish-setup-0.1.0-preview.4-amd64.exe'
+          $prevUrl = 'https://github.com/ybbapp/myfish/releases/download/v0.1.0-preview.4/myfish-setup-0.1.0-amd64.exe'
+          Write-Host "Downloading preview.4 Setup from $prevUrl"
           Invoke-WebRequest -Uri $prevUrl -OutFile $prev -UseBasicParsing
-          Write-Host "Installing preview.3 silently"
+          Write-Host "Installing preview.4 silently"
           $old = Start-Process -FilePath $prev -ArgumentList '/S' -Wait -PassThru
-          if ($old.ExitCode -ne 0) { throw "preview.3 installer exit $($old.ExitCode)" }
-          if (-not (Test-Path -LiteralPath $exe)) { throw "preview.3 app not installed at $exe" }
+          if ($old.ExitCode -ne 0) { throw "preview.4 installer exit $($old.ExitCode)" }
+          if (-not (Test-Path -LiteralPath $exe)) { throw "preview.4 app not installed at $exe" }
           New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
           $json = '{"mode":"dark","opacity":0.6,"highlight":0.82,"scale":1.1}'
           [System.IO.File]::WriteAllText($settings, $json)
@@ -139,8 +139,8 @@ jobs:
             if ([math]::Abs([double]$got.highlight - 0.82) -gt 1e-6) { throw "highlight not preserved ${when}: $($got.highlight)" }
             if ([math]::Abs([double]$got.scale - 1.1) -gt 1e-6) { throw "scale not preserved ${when}: $($got.scale)" }
           }
-          Assert-Settings 'after writing preview.3 settings'
-          Write-Host "Installing new Setup over preview.3: $setup"
+          Assert-Settings 'after writing preview.4 settings'
+          Write-Host "Installing new Setup over preview.4: $setup"
           $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "upgrade installer exit $($p.ExitCode)" }
           if (-not (Test-Path -LiteralPath $exe)) { throw "app missing at $exe after upgrade" }
@@ -170,7 +170,7 @@ jobs:
           if (Test-Path -LiteralPath $exe) { throw "app still present after uninstall" }
           if (Test-Path -LiteralPath $startMenu) { throw "Start menu shortcut still present after uninstall" }
           Assert-Settings 'after uninstall (user data must remain)'
-          Write-Host "amd64 preview.3 upgrade, start, uninstall (settings kept) passed"
+          Write-Host "amd64 preview.4 upgrade, start, uninstall (settings kept) passed"
           Write-Host "arm64 Setup was built but not executed on this amd64 runner"
       - name: Upload Windows packages
         uses: actions/upload-artifact@v4
