@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"path/filepath"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -209,4 +210,55 @@ func TestSettingsViewListsPresets(t *testing.T) {
 			t.Errorf("settings missing %q, texts %q", s, tt.Texts())
 		}
 	}
+}
+
+// Bounded reproduction of the reported settings-exit sequence through the
+// production view and controls. This is headless; it cannot clear a native
+// window/process crash without desktop logs and another native run.
+func TestSettingsReportedAdjustmentSequenceHeadless(t *testing.T) {
+	a := newApp()
+	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	tt := ui.NewTester(a.settingsView, settingsW, settingsH)
+	click := func(label string) {
+		t.Helper()
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	slide := func(key string, fraction float32) {
+		t.Helper()
+		r, ok := tt.Find(key)
+		if !ok {
+			t.Fatalf("missing slider %s", key)
+		}
+		tt.ClickAt(r.X+r.W*fraction, r.Y+r.H/2)
+		tt.Frame()
+		if a.quitting {
+			t.Fatal("settings caused quit")
+		}
+	}
+	click("深色底")
+	slide("glass-opacity", 0.59)
+	if a.settings.Mode != GlassDark || a.settings.Opacity < 0.5 || a.settings.Opacity > 0.7 {
+		t.Fatalf("dark/opacity not adjusted: %+v", a.settings)
+	}
+	slide("glass-highlight", 0.8)
+	if a.settings.Highlight < 0.7 || a.settings.Highlight > 0.9 {
+		t.Fatalf("highlight not adjusted: %+v", a.settings)
+	}
+	click("浅色底")
+	click("真透明（无填充）")
+	slide("glass-highlight", 0.3)
+	if a.settings.Mode != GlassClear || a.settings.Opacity != 0 || a.settings.Highlight < 0.2 || a.settings.Highlight > 0.4 || a.quitting {
+		t.Fatalf("unexpected final settings or quit: %+v quitting=%v", a.settings, a.quitting)
+	}
+	loaded, err := LoadSettings(a.settingsPath)
+	if err != nil || loaded != a.settings {
+		t.Fatalf("saved settings mismatch: %+v err=%v", loaded, err)
+	}
+	click("关闭")
+	if a.quitting {
+		t.Fatal("closing settings requested app quit")
+	}
+	t.Logf("headless production settings view final=%+v quitting=%v; native lifecycle not exercised", a.settings, a.quitting)
 }

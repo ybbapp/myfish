@@ -10,7 +10,7 @@ import (
 
 const (
 	settingsW     = 340
-	settingsH     = 340
+	settingsH     = 400
 	setLabel      = "SET"
 	settingsAccel = "CmdOrCtrl+Alt+G"
 )
@@ -37,7 +37,7 @@ func (a *app) settingsView(c *ui.Context) {
 		}
 
 		ui.Text(c, fmt.Sprintf("玻璃透明度  %d%%（0 为无填充）", int(a.settings.Opacity*100+0.5))).FontSize(13)
-		ui.Slider(c, &a.settings.Opacity, 0, 1).Width(300)
+		ui.Slider(c, &a.settings.Opacity, 0, 1).Label("glass-opacity").Width(300)
 		if a.settings.Opacity != a.lastOpacity {
 			a.settings.Clamp()
 			a.lastOpacity = a.settings.Opacity
@@ -45,7 +45,7 @@ func (a *app) settingsView(c *ui.Context) {
 		}
 
 		ui.Text(c, fmt.Sprintf("边缘高光  %d%%", int(a.settings.Highlight*100+0.5))).FontSize(13)
-		ui.Slider(c, &a.settings.Highlight, 0, 1).Width(300)
+		ui.Slider(c, &a.settings.Highlight, 0, 1).Label("glass-highlight").Width(300)
 		if a.settings.Highlight != a.lastHighlight {
 			a.settings.Clamp()
 			a.lastHighlight = a.settings.Highlight

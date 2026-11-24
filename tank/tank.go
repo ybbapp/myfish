@@ -89,20 +89,65 @@ type Plant struct {
 
 // Tank holds the simulation state.
 type Tank struct {
-	W, H     float64
-	Panel    Panel
-	Fishes   []Fish
-	Foods    []Food
-	Bubbles  []Bubble
-	Chomps   []Chomp
-	Plants   []Plant
-	Time     float64
-	Hovering bool
-	HoverX   float64
-	HoverY   float64
-	nextID   int
-	rng      *rand.Rand
-	bites    int
+	W, H      float64
+	Panel     Panel
+	Fishes    []Fish
+	Foods     []Food
+	Bubbles   []Bubble
+	Chomps    []Chomp
+	Plants    []Plant
+	Time      float64
+	Hovering  bool
+	HoverX    float64
+	HoverY    float64
+	nextID    int
+	rng       *rand.Rand
+	bites     int
+	foodTrace *FoodTrace
+}
+
+// FoodRecord is a test/debug event for one pellet. It is never drawn
+// and holds no user or host data — only simulation IDs and positions.
+type FoodRecord struct {
+	FoodID int     `json:"food_id"`
+	Reason string  `json:"reason"` // spawned, consumed, expired
+	Time   float64 `json:"time"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	FishID int     `json:"fish_id,omitempty"`
+	Age    float64 `json:"age,omitempty"`
+	Life   float64 `json:"life,omitempty"`
+}
+
+// FoodTrace records pellet fates when EnableFoodTrace is called.
+// The default (nil) costs a nil check and does not change the UI.
+type FoodTrace struct {
+	Events   []FoodRecord `json:"events"`
+	Spawned  int          `json:"spawned"`
+	Consumed int          `json:"consumed"`
+	Expired  int          `json:"expired"`
+}
+
+// EnableFoodTrace starts recording pellet spawn/consume/expire events.
+// It is for tests and debugging; the window never displays this.
+func (t *Tank) EnableFoodTrace() { t.foodTrace = &FoodTrace{} }
+
+// FoodTrace returns the recording, or nil if tracing is off.
+func (t *Tank) FoodTrace() *FoodTrace { return t.foodTrace }
+
+func (t *Tank) recordFood(rec FoodRecord) {
+	if t.foodTrace == nil {
+		return
+	}
+	t.foodTrace.Events = append(t.foodTrace.Events, rec)
+	switch rec.Reason {
+	case "spawned":
+		t.foodTrace.Spawned++
+	case "consumed":
+		t.foodTrace.Consumed++
+	case "expired":
+		t.foodTrace.Expired++
+	}
 }
 
 // New returns a tank of the given window size, with several fish, plants,
@@ -179,6 +224,10 @@ func (t *Tank) Step(dt float64) {
 			f.Life = foodLife
 		}
 		if f.Age >= f.Life {
+			t.recordFood(FoodRecord{
+				FoodID: f.ID, Reason: "expired", Time: t.Time,
+				X: f.X, Y: f.Y, Age: f.Age, Life: f.Life,
+			})
 			continue
 		}
 		f.Y += foodFall * dt
@@ -458,7 +507,12 @@ func (t *Tank) placeFood(x, y float64) bool {
 	if t.rng.Intn(3) == 0 {
 		glyph = FoodStar
 	}
-	t.Foods = append(t.Foods, Food{ID: t.nextID, X: x, Y: y, Glyph: glyph, Life: foodLife})
+	food := Food{ID: t.nextID, X: x, Y: y, Glyph: glyph, Life: foodLife}
+	t.Foods = append(t.Foods, food)
+	t.recordFood(FoodRecord{
+		FoodID: food.ID, Reason: "spawned", Time: t.Time,
+		X: food.X, Y: food.Y, Life: food.Life,
+	})
 	return true
 }
 
@@ -485,7 +539,12 @@ func (t *Tank) eatFood(i, foodIdx int) {
 		return
 	}
 	f := &t.Fishes[i]
+	food := t.Foods[foodIdx]
 	t.Foods = append(t.Foods[:foodIdx], t.Foods[foodIdx+1:]...)
+	t.recordFood(FoodRecord{
+		FoodID: food.ID, Reason: "consumed", Time: t.Time,
+		X: food.X, Y: food.Y, FishID: f.ID, Age: food.Age, Life: food.Life,
+	})
 	t.bites++
 	text := biteWords[(t.bites-1)%len(biteWords)]
 	mx, my := f.Mouth()
