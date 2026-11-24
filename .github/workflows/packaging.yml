@@ -93,9 +93,14 @@ jobs:
           # Real NSIS installer, not a renamed zip.
           function Assert-NsisInstaller([string]$path) {
             $bytes = [System.IO.File]::ReadAllBytes($path)
-            $end = [Math]::Min(4095, $bytes.Length - 1)
-            $ascii = [System.Text.Encoding]::ASCII.GetString($bytes[0..$end])
-            if ($ascii -notmatch 'Nullsoft') { throw "setup does not look like NSIS: $path" }
+            if ($bytes.Length -lt 64 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+              throw "setup is not a Windows PE executable: $path"
+            }
+            # NSIS 3 stores "NullsoftInst" in the overlay, often well past 4 KiB.
+            $ascii = [System.Text.Encoding]::Latin1.GetString($bytes)
+            if ($ascii -notmatch 'Nullsoft') {
+              throw "setup does not contain a Nullsoft/NSIS signature: $path size=$($bytes.Length)"
+            }
           }
           Assert-NsisInstaller $amd.FullName
           Assert-NsisInstaller $arm.FullName
