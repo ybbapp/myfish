@@ -57,3 +57,48 @@ func TestEscapeRestoresInteraction(t *testing.T) {
 		t.Fatal("Escape did not restore interaction")
 	}
 }
+
+func TestCtrlAltIRestoresAndDoesNotToggle(t *testing.T) {
+	a := newApp()
+	a.clickThrough = true
+	tt := ui.NewTester(a.view, windowW, windowH)
+	tt.Key(ui.Ctrl|ui.Alt, ui.KeyI)
+	if a.clickThrough {
+		t.Fatal("Ctrl+Alt+I did not restore interaction")
+	}
+	tt.Key(ui.Ctrl|ui.Alt, ui.KeyI)
+	if a.clickThrough {
+		t.Fatal("a second Ctrl+Alt+I toggled click-through back on")
+	}
+}
+
+func TestRestoreInteractionIsUnconditional(t *testing.T) {
+	a := newApp()
+	a.clickThrough = false
+	a.restoreInteraction()
+	if a.clickThrough {
+		t.Fatal("restore turned click-through on")
+	}
+	a.clickThrough = true
+	a.restoreInteraction()
+	if a.clickThrough {
+		t.Fatal("restore left click-through on")
+	}
+	a.restoreInteraction()
+	if a.clickThrough {
+		t.Fatal("a second restore toggled click-through back on")
+	}
+}
+
+func TestToggleClickThroughIsSeparate(t *testing.T) {
+	a := newApp()
+	a.clickThrough = false
+	a.toggleClickThrough()
+	if !a.clickThrough {
+		t.Fatal("toggle did not enable click-through")
+	}
+	a.toggleClickThrough()
+	if a.clickThrough {
+		t.Fatal("toggle did not restore interaction")
+	}
+}

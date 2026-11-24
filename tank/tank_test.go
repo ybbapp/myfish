@@ -39,7 +39,7 @@ func TestStepIgnoresTinyAndCapsLongDelta(t *testing.T) {
 	}
 	tk.Step(2)
 	dx := tk.Fishes[0].X - before.X
-	max := chaseSpeed*maxStep + 40*maxStep + 0.01 // include a little separation nudge
+	max := chaseSpeed*maxStep + 180*maxStep + 0.01 // include a little separation nudge
 	if dx < 0 || dx > max {
 		t.Fatalf("capped step moved fish by %v, want 0..%v", dx, max)
 	}
@@ -180,5 +180,32 @@ func TestSpriteFollowsFacing(t *testing.T) {
 	tk.Fishes[0].Facing = -1
 	if tk.Sprite(0) != SpriteLeft {
 		t.Fatalf("left sprite %q", tk.Sprite(0))
+	}
+}
+
+func TestFishDoNotStackOnTheSameFood(t *testing.T) {
+	tk := New(560, 380, 9)
+	tk.Foods = nil
+	tk.Fishes[0].X, tk.Fishes[0].Y = 80, 80
+	tk.Fishes[1].X, tk.Fishes[1].Y = 80, 200
+	tk.Fishes[2].X, tk.Fishes[2].Y = 400, 140
+	if !tk.DropFood(280, 160) {
+		t.Fatal("drop")
+	}
+	minAllowed := 70.0
+	for n := 0; n < 80 && len(tk.Foods) > 0; n++ {
+		tk.Step(0.05)
+		for i := 0; i < len(tk.Fishes); i++ {
+			for j := i + 1; j < len(tk.Fishes); j++ {
+				a, b := tk.Fishes[i], tk.Fishes[j]
+				d := math.Hypot((a.X+fishW/2)-(b.X+fishW/2), (a.Y+fishH/2)-(b.Y+fishH/2))
+				if d < minAllowed {
+					t.Fatalf("step %d: fish %d and %d stacked (d=%v)", n, i, j, d)
+				}
+			}
+		}
+	}
+	if len(tk.Foods) != 0 {
+		t.Fatalf("food was never eaten")
 	}
 }

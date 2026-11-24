@@ -12,6 +12,7 @@ import (
 	"image/draw"
 	"image/png"
 	"log"
+	"runtime"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -30,15 +31,14 @@ const (
 	chompFontSize  = 18
 	handleFontSize = 16
 
-	// Official frameless Linux drag starts only after ~8px of movement.
-	// The handle is a real-sized Box (not just glyph pixels) so it can
-	// be found and grabbed.
 	dragLeft = 8
 	dragTop  = 8
-	dragW    = 108
-	dragH    = 32
+	dragW    = 80
+	dragH    = 30
 
-	dragLabel = "::: 拖动"
+	// ASCII only: a CJK label plus a heavy stroke was hard to read
+	// (halo / ghosting) on the Linux screenshot.
+	dragLabel = "DRAG"
 )
 
 var (
@@ -50,9 +50,8 @@ var (
 	colorFoodEdge   = ui.RGB(220, 104, 8)
 	colorChomp      = ui.RGB(255, 210, 40)
 	colorChompEdge  = ui.RGB(20, 40, 80)
-	colorHandle     = ui.RGB(16, 70, 160)
-	colorHandleEdge = ui.RGB(255, 255, 255)
-	colorHandleBg   = ui.RGBA(12, 40, 96, 56)
+	colorHandle     = ui.RGB(240, 248, 255)
+	colorHandleBg   = ui.RGBA(16, 56, 120, 210)
 )
 
 type app struct {
@@ -62,6 +61,9 @@ type app struct {
 	last         time.Time
 	pressX       float32
 	pressY       float32
+	dragging     bool
+	dragLocalX   float32
+	dragLocalY   float32
 	alwaysOnTop  bool
 	clickThrough bool
 	quitting     bool
@@ -87,11 +89,15 @@ func (a *app) view(c *ui.Context) {
 	a.tank.Step(dt)
 	c.AnimationFrame()
 
-	if c.Shortcut(ui.Cmd, ui.KeyQ) {
+	if c.Shortcut(ui.Cmd, ui.KeyQ) || c.Shortcut(ui.Ctrl|ui.Alt, ui.KeyQ) {
 		a.quit()
 	}
-	if c.Shortcut(0, ui.KeyEscape) {
+	// Restore is unconditional: these keys never toggle click-through on.
+	if c.Shortcut(0, ui.KeyEscape) || c.Shortcut(ui.Ctrl|ui.Alt, ui.KeyI) {
 		a.restoreInteraction()
+	}
+	if c.Shortcut(ui.Ctrl|ui.Alt, ui.KeyT) {
+		a.toggleClickThrough()
 	}
 
 	c.Root().Background(ui.Transparent)
@@ -119,19 +125,17 @@ func (a *app) view(c *ui.Context) {
 			TextColor(colorFood).TextStroke(2, colorFoodEdge).
 			Absolute().Left(float32(f.X - 8)).Top(float32(f.Y - 12))
 	}
-	for i, fish := range a.tank.Fishes {
+	for _, fish := range a.tank.Fishes {
 		ui.Text(c, fish.Sprite()).Key(fmt.Sprintf("fish-%d", fish.ID)).
 			Font("monospace").FontSize(fishFontSize).Bold().
 			TextColor(colorFish).TextStroke(2, colorFishStroke).
 			Absolute().Left(float32(fish.X)).Top(float32(fish.Y))
-		_ = i
 	}
 	for _, ch := range a.tank.Chomps {
 		fade := 1 - ch.Age/ch.Life
 		if fade < 0 {
 			fade = 0
 		}
-		// Stay fairly solid for most of the life, then fade.
 		if fade > 0.35 {
 			fade = 0.65 + 0.35*fade
 		}
@@ -142,32 +146,59 @@ func (a *app) view(c *ui.Context) {
 			Absolute().Left(float32(ch.X)).Top(float32(ch.Y))
 	}
 
-	// Drawn last so hit-testing finds this Box first. Official examples
-	// put DragWindow on a sized Box, not only on tight glyph bounds.
-	// Linux frameless windows start the move only after the pointer
-	// travels past an 8px threshold with the button still down.
+	// Official DragWindow() on Linux calls gtk_window_begin_move_drag
+	// only after an 8px move, for undecorated windows. A second Linux
+	// run with a visible handle still did not move the window, so this
+	// handle instead tracks the pointer and uses Window.SetPosition
+	// (works on this X11 session; Wayland compositors may ignore it).
 	ui.Box(c).Key("drag").
 		Absolute().Top(dragTop).Left(dragLeft).Size(dragW, dragH).
 		Radius(8).Background(colorHandleBg).
 		Cursor(ui.CursorMove).
-		DragWindow().
+		HandleInput(a.onDragInput).
 		Children(func() {
 			ui.Text(c, dragLabel).Key("drag-label").
 				Font("monospace").FontSize(handleFontSize).Bold().
-				TextColor(colorHandle).TextStroke(1.5, colorHandleEdge).
-				DragWindow()
+				TextColor(colorHandle)
 		})
+}
+
+func (a *app) onDragInput(ev ui.InputEvent) bool {
+	switch ev.Kind {
+	case ui.InputPointerDown:
+		if ev.Button != 0 {
+			return false
+		}
+		a.dragging = true
+		a.dragLocalX, a.dragLocalY = ev.X, ev.Y
+		return true
+	case ui.InputPointerMove:
+		if !a.dragging {
+			return false
+		}
+		if a.win != nil {
+			x, y := a.win.Position()
+			a.win.SetPosition(x+int(ev.X-a.dragLocalX), y+int(ev.Y-a.dragLocalY))
+		}
+		return true
+	case ui.InputPointerUp:
+		a.dragging = false
+		return true
+	default:
+		return a.dragging
+	}
 }
 
 func (a *app) ready() {
 	var err error
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
 		Icon:           trayIcon(),
-		IconIsTemplate: true,
+		IconIsTemplate: false, // a black template vanishes on a dark panel
 		ToolTip:        "小鱼缸",
 	})
 	if err != nil {
 		log.Println("tray:", err)
+		a.tray = nil
 	}
 
 	a.win = mygo.NewWindow(mygo.WindowOptions{
@@ -186,9 +217,10 @@ func (a *app) ready() {
 		Content:           ui.View(a.view),
 	})
 	a.win.OnClose(func(e *mygo.CloseEvent) {
-		// Hide to the tray only when a tray exists; otherwise a close
-		// would leave no way to quit from the UI.
-		if !a.quitting && a.tray != nil {
+		// Hide to the tray only when a tray is likely visible. On this
+		// Linux desktop NewTray can succeed with no panel plugin and no
+		// StatusNotifierWatcher, so hiding would lose the window.
+		if !a.quitting && a.tray != nil && runtime.GOOS != "linux" {
 			e.PreventDefault()
 			a.win.Hide()
 		}
@@ -209,6 +241,7 @@ func (a *app) bindGlobalShortcuts() {
 	for _, b := range []binding{
 		{"CmdOrCtrl+Alt+Q", "退出小鱼缸", a.quit},
 		{"CmdOrCtrl+Alt+I", "恢复交互", a.restoreInteraction},
+		{"CmdOrCtrl+Alt+T", "切换鼠标穿透", a.toggleClickThrough},
 	} {
 		err := mygo.GlobalShortcut.RegisterWith(b.keys, mygo.GlobalShortcutOptions{Description: b.desc}, b.fn)
 		if err != nil {
@@ -235,15 +268,11 @@ func (a *app) syncTrayMenu() {
 		top = "开启置顶"
 	}
 	a.tray.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
-		{Label: "显示鱼缸", Click: func(*mygo.MenuItem, *mygo.Window) {
+		{Label: "显示鱼缸", Accelerator: "CmdOrCtrl+Alt+I", Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.restoreInteraction()
 		}},
-		{Label: through, Accelerator: "CmdOrCtrl+Alt+I", Click: func(*mygo.MenuItem, *mygo.Window) {
-			if a.clickThrough {
-				a.restoreInteraction()
-				return
-			}
-			a.setClickThrough(true)
+		{Label: through, Accelerator: "CmdOrCtrl+Alt+T", Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.toggleClickThrough()
 		}},
 		{Label: top, Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.alwaysOnTop = !a.alwaysOnTop
@@ -263,11 +292,20 @@ func (a *app) setClickThrough(on bool) {
 	a.syncTrayMenu()
 }
 
+// restoreInteraction always turns click-through off. It must not toggle.
 func (a *app) restoreInteraction() {
 	a.setClickThrough(false)
 	if a.win != nil {
 		a.win.Show()
 	}
+}
+
+func (a *app) toggleClickThrough() {
+	if a.clickThrough {
+		a.restoreInteraction()
+		return
+	}
+	a.setClickThrough(true)
 }
 
 func (a *app) quit() {
@@ -281,7 +319,7 @@ func inDragHandle(x, y float32) bool {
 
 func trayIcon() []byte {
 	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	ink := color.NRGBA{A: 255}
+	ink := color.NRGBA{R: 30, G: 120, B: 220, A: 255}
 	for _, r := range []image.Rectangle{
 		image.Rect(4, 14, 22, 19),
 		image.Rect(22, 12, 26, 21),

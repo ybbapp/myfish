@@ -159,11 +159,13 @@ func (t *Tank) Step(dt float64) {
 
 func (t *Tank) stepFish(i int, dt float64) {
 	f := &t.Fishes[i]
-	tx, ty, chasing := t.nearestFood(i)
+	foodX, foodY, chasing := t.nearestFood(i)
 	speed := wanderSpeed
 	if chasing {
 		speed = chaseSpeed
-		f.TargetX, f.TargetY = tx, ty
+		// Only the nearest fish aims at the food itself; others take a
+		// stand-off so their sprites do not stack into one string.
+		f.TargetX, f.TargetY = t.spreadAim(i, foodX, foodY)
 	} else {
 		f.Retarget -= dt
 		if f.Retarget <= 0 {
@@ -188,16 +190,60 @@ func (t *Tank) stepFish(i int, dt float64) {
 	}
 	t.clampFish(i)
 
-	if chasing && dist < eatRadius {
-		t.eatNearest(i)
+	if chasing {
+		mouthX := f.X + fishW/2
+		mouthY := f.Y + fishH/2
+		if math.Hypot(foodX-mouthX, foodY-mouthY) < eatRadius {
+			t.eatNearest(i)
+		}
 	}
+}
+
+// spreadAim keeps fish that share a food from aiming at the same point.
+// The closest fish heads for the food; others approach from the side.
+func (t *Tank) spreadAim(i int, foodX, foodY float64) (x, y float64) {
+	closest := i
+	best := math.MaxFloat64
+	var peers []int
+	for j, f := range t.Fishes {
+		fx, fy, ok := t.nearestFood(j)
+		if !ok || math.Hypot(fx-foodX, fy-foodY) > 1 {
+			continue
+		}
+		peers = append(peers, j)
+		d := math.Hypot(f.X+fishW/2-foodX, f.Y+fishH/2-foodY)
+		if d < best {
+			best, closest = d, j
+		}
+	}
+	if i == closest || len(peers) <= 1 {
+		return foodX, foodY
+	}
+	rank := 0
+	for _, p := range peers {
+		if p == closest {
+			continue
+		}
+		if p == i {
+			break
+		}
+		rank++
+	}
+	n := len(peers) - 1
+	if n < 1 {
+		n = 1
+	}
+	// Place extras around the food, away from the eater's approach.
+	ang := math.Pi*0.55 + 2*math.Pi*float64(rank)/float64(n)
+	r := 58.0
+	return foodX + math.Cos(ang)*r, foodY + math.Sin(ang)*r
 }
 
 func (t *Tank) separateFish(dt float64) {
 	if dt <= 0 {
 		return
 	}
-	nudge := 40 * dt
+	nudge := 180 * dt
 	for i := 0; i < len(t.Fishes); i++ {
 		axi, ayi := t.Fishes[i].X+fishW/2, t.Fishes[i].Y+fishH/2
 		for j := i + 1; j < len(t.Fishes); j++ {
