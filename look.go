@@ -6,28 +6,36 @@ import (
 	"mygo-desktop-fish/tank"
 )
 
+// MyGo ui.RGBA takes alpha in 0–1 (values >= 1 become fully opaque).
+// An earlier pass passed 0–255, so the plate fill rendered as a solid
+// pale plaque and hid the desktop. The front face is intentionally left
+// unfilled; the plate is defined by edge highlights, the right/top
+// thickness, and the stand.
 var (
-	colorGlassFill   = ui.RGBA(230, 242, 248, 28)
-	colorGlassEdge   = ui.RGBA(210, 226, 234, 210)
-	colorGlassSide   = ui.RGBA(228, 238, 244, 150)
-	colorGlassTop    = ui.RGBA(245, 250, 252, 170)
-	colorGlassHi     = ui.RGBA(255, 255, 255, 150)
+	colorGlassEdge   = ui.RGBA(200, 222, 232, 0.85)
+	colorGlassSide   = ui.RGBA(228, 238, 244, 0.20)
+	colorGlassTop    = ui.RGBA(245, 250, 252, 0.22)
+	colorGlassHi     = ui.RGBA(255, 255, 255, 0.70)
 	colorStand       = ui.RGB(164, 222, 214)
 	colorStandDark   = ui.RGB(132, 196, 188)
 	colorStandLight  = ui.RGB(190, 236, 230)
-	colorStandShadow = ui.RGBA(70, 120, 116, 50)
+	colorStandShadow = ui.RGBA(70, 120, 116, 0.22)
 	colorFish        = ui.RGB(28, 196, 220)
-	colorFishGlow    = ui.RGBA(170, 240, 255, 140)
+	colorFishGlow    = ui.RGBA(170, 240, 255, 0.45)
 	colorBubble      = ui.RGB(56, 200, 230)
-	colorBubbleGlow  = ui.RGBA(180, 240, 255, 130)
+	colorBubbleGlow  = ui.RGBA(180, 240, 255, 0.40)
 	colorFood        = ui.RGB(255, 176, 28)
 	colorFoodEdge    = ui.RGB(230, 110, 16)
 	colorPlant       = ui.RGB(46, 230, 118)
-	colorPlantGlow   = ui.RGBA(160, 255, 200, 120)
+	colorPlantGlow   = ui.RGBA(160, 255, 200, 0.40)
 	colorChomp       = ui.RGB(255, 214, 70)
 	colorChompEdge   = ui.RGB(40, 50, 40)
 	colorHandle      = ui.RGB(248, 255, 252)
 	colorHandleMute  = ui.RGB(70, 130, 124)
+	colorFeedHint    = ui.RGBA(90, 150, 148, 0.45)
+	colorFeedHintHot = ui.RGBA(70, 140, 138, 0.70)
+	colorFeedLine    = ui.RGBA(190, 220, 228, 0.40)
+	colorFeedLineHot = ui.RGBA(210, 234, 240, 0.62)
 )
 
 const (
@@ -39,35 +47,42 @@ const (
 	handleFontSize = 13
 )
 
-func drawChassis(p *ui.Painter, pan tank.Panel) {
+func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool) {
 	gx, gy, gw, gh, t := float32(pan.GX), float32(pan.GY), float32(pan.GW), float32(pan.GH), float32(pan.Thickness)
 
-	// Stand first, so the plate sits on it.
 	bx, by, bw, bh := float32(pan.BX), float32(pan.BY), float32(pan.BW), float32(pan.BH)
 	legH, legW := float32(pan.LegH), float32(pan.LegW)
-	// Soft contact shadow under the stand.
-	p.Fill(ui.Rect{X: bx + 6, Y: by + bh + legH - 4, W: bw - 12, H: 8}, colorStandShadow, 6)
+	p.Fill(ui.Rect{X: bx + 8, Y: by + bh + legH - 3, W: bw - 16, H: 6}, colorStandShadow, 5)
 
 	leg := func(x float32) {
 		r := ui.Rect{X: x, Y: by + bh, W: legW, H: legH}
-		p.Fill(r, colorStand, 3)
-		p.Fill(ui.Rect{X: x + legW - 5, Y: by + bh, W: 5, H: legH}, colorStandDark, 2)
-		p.Stroke(r, colorStandDark, 3, 1)
+		p.Fill(r, colorStand, 2)
+		p.Fill(ui.Rect{X: x + legW - 4, Y: by + bh, W: 4, H: legH}, colorStandDark, 1)
+		p.Stroke(r, colorStandDark, 2, 1)
 	}
 	leg(float32(pan.Leg1X))
 	leg(float32(pan.Leg2X))
 
 	plat := ui.Rect{X: bx, Y: by, W: bw, H: bh}
-	p.Fill(plat, colorStand, 5)
-	p.Fill(ui.Rect{X: bx, Y: by, W: bw, H: 10}, colorStandLight, 5)
-	p.Fill(ui.Rect{X: bx + bw - 7, Y: by + 8, W: 7, H: bh - 8}, colorStandDark, 3)
-	p.Stroke(plat, colorStandDark, 5, 1.15)
-	// Slot where the plate meets the stand.
+	p.Fill(plat, colorStand, 4)
+	hiH := bh * 0.28
+	if hiH < 5 {
+		hiH = 5
+	}
+	p.Fill(ui.Rect{X: bx, Y: by, W: bw, H: hiH}, colorStandLight, 4)
+	p.Fill(ui.Rect{X: bx + bw - 5, Y: by + hiH*0.6, W: 5, H: bh - hiH*0.6}, colorStandDark, 2)
+	p.Stroke(plat, colorStandDark, 4, 1)
 	slotW := gw + t*0.4
 	slotX := gx - (slotW-gw)/2
-	p.Fill(ui.Rect{X: slotX, Y: by + 3, W: slotW, H: 4}, colorStandDark, 1)
+	p.Fill(ui.Rect{X: slotX, Y: by + 2, W: slotW, H: 3}, colorStandDark, 1)
 
-	// Top thickness of the plate, then the right face, then the front.
+	// Subtle hairline just above the plate marks the click-to-feed strip.
+	line := colorFeedLine
+	if feedHot {
+		line = colorFeedLineHot
+	}
+	p.Stroke(ui.Rect{X: float32(pan.FX) + 8, Y: float32(pan.FY+pan.FH) - 3, W: float32(pan.FW) - 16, H: 1}, line, 0.5, 1)
+
 	top := &ui.Path{}
 	top.MoveTo(gx, gy)
 	top.LineTo(gx+t*0.45, gy-t*0.38)
@@ -86,17 +101,15 @@ func drawChassis(p *ui.Painter, pan tank.Panel) {
 	p.FillPath(side, colorGlassSide)
 	p.StrokePath(side, 1, colorGlassEdge)
 
+	// No front fill — the desktop must show through the plate.
 	front := ui.Rect{X: gx, Y: gy, W: gw, H: gh}
-	p.Fill(front, colorGlassFill, 2)
-	p.Stroke(front, colorGlassEdge, 2, 1.35)
+	p.Stroke(front, colorGlassEdge, 2, 1.25)
 
-	// Sharp inner highlights along the left and top — a thin glass edge,
-	// not a thick blur.
 	hi := &ui.Path{}
-	hi.MoveTo(gx+3, gy+gh-4)
-	hi.LineTo(gx+3, gy+3)
-	hi.LineTo(gx+gw-4, gy+3)
-	p.StrokePath(hi.Cap(ui.ButtCap), 1.5, colorGlassHi)
+	hi.MoveTo(gx+2.5, gy+gh-4)
+	hi.LineTo(gx+2.5, gy+2.5)
+	hi.LineTo(gx+gw-4, gy+2.5)
+	p.StrokePath(hi.Cap(ui.ButtCap), 1.35, colorGlassHi)
 }
 
 func glowText(c *ui.Context, s, key string, size float32, fill, glow ui.Color, x, y float64) {

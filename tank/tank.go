@@ -5,6 +5,7 @@ package tank
 import (
 	"math"
 	"math/rand"
+	"sort"
 )
 
 const (
@@ -17,10 +18,12 @@ const (
 	bubbleRise  = 36.0
 	wanderSpeed = 52.0
 	chaseSpeed  = 115.0
+	hoverSpeed  = 26.0
+	hoverStand  = 56.0
 	chompLife   = 1.35
 	fishW       = 108.0
 	fishH       = 28.0
-	minFishGap  = 80.0
+	fishGap     = 10.0
 )
 
 // Character sprites follow the reference stills, not a round bowl.
@@ -46,7 +49,7 @@ type Fish struct {
 	Retarget float64
 }
 
-// Food falls after a click.
+// Food falls after a click on the strip above the plate.
 type Food struct {
 	ID    int
 	X, Y  float64
@@ -80,17 +83,20 @@ type Plant struct {
 
 // Tank holds the simulation state.
 type Tank struct {
-	W, H    float64
-	Panel   Panel
-	Fishes  []Fish
-	Foods   []Food
-	Bubbles []Bubble
-	Chomps  []Chomp
-	Plants  []Plant
-	Time    float64
-	nextID  int
-	rng     *rand.Rand
-	bites   int
+	W, H     float64
+	Panel    Panel
+	Fishes   []Fish
+	Foods    []Food
+	Bubbles  []Bubble
+	Chomps   []Chomp
+	Plants   []Plant
+	Time     float64
+	Hovering bool
+	HoverX   float64
+	HoverY   float64
+	nextID   int
+	rng      *rand.Rand
+	bites    int
 }
 
 // New returns a tank of the given window size, with several fish, plants,
@@ -169,10 +175,11 @@ func (t *Tank) Step(dt float64) {
 	clear(t.Foods[len(alive):])
 	t.Foods = alive
 
+	hunters := t.assignHunters()
 	for i := range t.Fishes {
-		t.stepFish(i, dt)
+		t.stepFish(i, dt, hunters[i])
 	}
-	t.separateFish(dt)
+	t.separateFish(hunters)
 	t.stepBubbles(dt)
 	t.stepChomps(dt)
 
@@ -181,17 +188,36 @@ func (t *Tank) Step(dt float64) {
 	}
 }
 
-func (t *Tank) stepFish(i int, dt float64) {
+func (t *Tank) stepFish(i int, dt float64, foodIdx int) {
 	f := &t.Fishes[i]
-	foodX, foodY, chasing := t.nearestFood(i)
+	chasing := foodIdx >= 0 && foodIdx < len(t.Foods)
 	speed := wanderSpeed
 	if chasing {
 		speed = chaseSpeed
-		f.TargetX, f.TargetY = t.spreadAim(i, foodX, foodY)
+		f.TargetX, f.TargetY = t.Foods[foodIdx].X, t.Foods[foodIdx].Y
+	} else if t.Hovering && t.nearestHover() == i {
+		speed = hoverSpeed
+		cx, cy := f.X+fishW/2, f.Y+fishH/2
+		dx, dy := t.HoverX-cx, t.HoverY-cy
+		dist := math.Hypot(dx, dy)
+		if dist > hoverStand {
+			// Ease toward the pointer but stop at a standoff; never jump.
+			f.TargetX = cx + dx*(dist-hoverStand)/dist
+			f.TargetY = cy + dy*(dist-hoverStand)/dist
+		} else {
+			f.TargetX, f.TargetY = cx, cy
+		}
 	} else {
 		f.Retarget -= dt
 		if f.Retarget <= 0 {
 			t.pickWanderTarget(i)
+		}
+	}
+	if t.Hovering && !chasing {
+		if t.HoverX < f.X+fishW/2-8 {
+			f.Facing = -1
+		} else if t.HoverX > f.X+fishW/2+8 {
+			f.Facing = 1
 		}
 	}
 	dx := f.TargetX - (f.X + fishW/2)
@@ -202,8 +228,10 @@ func (t *Tank) stepFish(i int, dt float64) {
 		f.VY = dy / dist * speed
 		f.X += f.VX * dt
 		f.Y += f.VY * dt
+	} else {
+		f.VX, f.VY = 0, 0
 	}
-	if math.Abs(f.VX) > 6 {
+	if math.Abs(f.VX) > 6 && !t.Hovering {
 		if f.VX > 0 {
 			f.Facing = 1
 		} else {
@@ -215,71 +243,104 @@ func (t *Tank) stepFish(i int, dt float64) {
 	if chasing {
 		mouthX := f.X + fishW/2
 		mouthY := f.Y + fishH/2
-		if math.Hypot(foodX-mouthX, foodY-mouthY) < eatRadius {
-			t.eatNearest(i)
+		food := t.Foods[foodIdx]
+		if math.Hypot(food.X-mouthX, food.Y-mouthY) < eatRadius {
+			t.eatFood(i, foodIdx)
 		}
 	}
 }
 
-func (t *Tank) spreadAim(i int, foodX, foodY float64) (x, y float64) {
-	closest := i
-	best := math.MaxFloat64
-	var peers []int
-	for j, f := range t.Fishes {
-		fx, fy, ok := t.nearestFood(j)
-		if !ok || math.Hypot(fx-foodX, fy-foodY) > 1 {
-			continue
-		}
-		peers = append(peers, j)
-		d := math.Hypot(f.X+fishW/2-foodX, f.Y+fishH/2-foodY)
-		if d < best {
-			best, closest = d, j
+func (t *Tank) nearestHover() int {
+	best, bestD := 0, math.MaxFloat64
+	for i, f := range t.Fishes {
+		d := math.Hypot(f.X+fishW/2-t.HoverX, f.Y+fishH/2-t.HoverY)
+		if d < bestD {
+			best, bestD = i, d
 		}
 	}
-	if i == closest || len(peers) <= 1 {
-		return foodX, foodY
-	}
-	rank := 0
-	for _, p := range peers {
-		if p == closest {
-			continue
-		}
-		if p == i {
-			break
-		}
-		rank++
-	}
-	n := len(peers) - 1
-	if n < 1 {
-		n = 1
-	}
-	ang := math.Pi*0.55 + 2*math.Pi*float64(rank)/float64(n)
-	r := 40.0
-	return foodX + math.Cos(ang)*r, foodY + math.Sin(ang)*r
+	return best
 }
 
-func (t *Tank) separateFish(dt float64) {
-	if dt <= 0 {
-		return
+func (t *Tank) assignHunters() []int {
+	assigned := make([]int, len(t.Fishes))
+	for i := range assigned {
+		assigned[i] = -1
 	}
-	nudge := 180 * dt
-	for i := 0; i < len(t.Fishes); i++ {
-		axi, ayi := t.Fishes[i].X+fishW/2, t.Fishes[i].Y+fishH/2
-		for j := i + 1; j < len(t.Fishes); j++ {
-			axj, ayj := t.Fishes[j].X+fishW/2, t.Fishes[j].Y+fishH/2
-			dx, dy := axi-axj, ayi-ayj
-			d := math.Hypot(dx, dy)
-			if d >= minFishGap || d < 0.5 {
-				continue
+	if len(t.Foods) == 0 || len(t.Fishes) == 0 {
+		return assigned
+	}
+	type pair struct {
+		fi, fo int
+		d      float64
+	}
+	pairs := make([]pair, 0, len(t.Fishes)*len(t.Foods))
+	for i, f := range t.Fishes {
+		cx, cy := f.X+fishW/2, f.Y+fishH/2
+		for j, food := range t.Foods {
+			pairs = append(pairs, pair{i, j, math.Hypot(food.X-cx, food.Y-cy)})
+		}
+	}
+	sort.Slice(pairs, func(a, b int) bool { return pairs[a].d < pairs[b].d })
+	fishUsed := make([]bool, len(t.Fishes))
+	foodUsed := make([]bool, len(t.Foods))
+	for _, p := range pairs {
+		if fishUsed[p.fi] || foodUsed[p.fo] {
+			continue
+		}
+		fishUsed[p.fi] = true
+		foodUsed[p.fo] = true
+		assigned[p.fi] = p.fo
+	}
+	return assigned
+}
+
+func (t *Tank) separateFish(hunters []int) {
+	hunting := make([]bool, len(t.Fishes))
+	for i, fo := range hunters {
+		if i < len(hunting) && fo >= 0 {
+			hunting[i] = true
+		}
+	}
+	for range 3 {
+		for i := 0; i < len(t.Fishes); i++ {
+			for j := i + 1; j < len(t.Fishes); j++ {
+				a, b := &t.Fishes[i], &t.Fishes[j]
+				aL, aT := a.X-fishGap/2, a.Y-fishGap/2
+				aR, aB := a.X+fishW+fishGap/2, a.Y+fishH+fishGap/2
+				bL, bT := b.X-fishGap/2, b.Y-fishGap/2
+				bR, bB := b.X+fishW+fishGap/2, b.Y+fishH+fishGap/2
+				ox := math.Min(aR, bR) - math.Max(aL, bL)
+				oy := math.Min(aB, bB) - math.Max(aT, bT)
+				if ox <= 0 || oy <= 0 {
+					continue
+				}
+				var dx, dy float64
+				if ox < oy {
+					if a.X+fishW/2 <= b.X+fishW/2 {
+						dx = -ox
+					} else {
+						dx = ox
+					}
+				} else {
+					if a.Y+fishH/2 <= b.Y+fishH/2 {
+						dy = -oy
+					} else {
+						dy = oy
+					}
+				}
+				wa, wb := 0.5, 0.5
+				if hunting[i] && !hunting[j] {
+					wa, wb = 0.2, 0.8
+				} else if hunting[j] && !hunting[i] {
+					wa, wb = 0.8, 0.2
+				}
+				a.X += dx * wa
+				a.Y += dy * wa
+				b.X -= dx * wb
+				b.Y -= dy * wb
+				t.clampFish(i)
+				t.clampFish(j)
 			}
-			nx, ny := dx/d, dy/d
-			push := (minFishGap - d) * nudge / minFishGap
-			t.Fishes[i].X += nx * push
-			t.Fishes[i].Y += ny * push
-			t.Fishes[j].X -= nx * push
-			t.Fishes[j].Y -= ny * push
-			t.clampFish(i)
-			t.clampFish(j)
 		}
 	}
 }
@@ -318,15 +379,34 @@ func (t *Tank) stepChomps(dt float64) {
 	t.Chomps = alive
 }
 
-// DropFood places food at (x, y) if the point is on the plate interior.
-func (t *Tank) DropFood(x, y float64) bool {
+// FeedFromAbove drops food into the plate from a click on the strip
+// above it. The food starts at the top of the interior, at the click's
+// horizontal position. Clicks on the plate itself must not call this
+// successfully: ContainsFeed rejects them.
+func (t *Tank) FeedFromAbove(x, y float64) bool {
+	if len(t.Foods) >= MaxFood {
+		return false
+	}
+	if !t.Panel.ContainsFeed(x, y) {
+		return false
+	}
+	return t.placeFood(x-4, t.Panel.IY)
+}
+
+// PlaceFood puts food at (x, y) inside the plate. It is for tests and
+// the simulator; the desktop click path uses FeedFromAbove.
+func (t *Tank) PlaceFood(x, y float64) bool {
 	if len(t.Foods) >= MaxFood {
 		return false
 	}
 	if !t.Panel.ContainsInterior(x, y) {
 		return false
 	}
-	x, y = t.Panel.ClampInside(x-4, y-4, 8, 8)
+	return t.placeFood(x-4, y-4)
+}
+
+func (t *Tank) placeFood(x, y float64) bool {
+	x, y = t.Panel.ClampInside(x, y, 8, 8)
 	t.nextID++
 	glyph := FoodGlyph
 	if t.rng.Intn(3) == 0 {
@@ -336,42 +416,30 @@ func (t *Tank) DropFood(x, y float64) bool {
 	return true
 }
 
-func (t *Tank) nearestFood(i int) (x, y float64, ok bool) {
-	if i < 0 || i >= len(t.Fishes) || len(t.Foods) == 0 {
-		return 0, 0, false
-	}
-	f := t.Fishes[i]
-	fx := f.X + fishW/2
-	fy := f.Y + fishH/2
-	best := 0
-	bestD := math.MaxFloat64
-	for i, food := range t.Foods {
-		d := math.Hypot(food.X-fx, food.Y-fy)
-		if d < bestD {
-			bestD = d
-			best = i
-		}
-	}
-	return t.Foods[best].X, t.Foods[best].Y, true
+// SetHover records a restrained pointer interaction on the plate.
+// It never drops food.
+func (t *Tank) SetHover(x, y float64) {
+	t.Hovering = true
+	t.HoverX, t.HoverY = x, y
 }
 
-func (t *Tank) eatNearest(i int) {
-	if i < 0 || i >= len(t.Fishes) || len(t.Foods) == 0 {
+// ClearHover ends the pointer interaction and returns idle fish to wandering.
+func (t *Tank) ClearHover() {
+	if !t.Hovering {
+		return
+	}
+	t.Hovering = false
+	for i := range t.Fishes {
+		t.pickWanderTarget(i)
+	}
+}
+
+func (t *Tank) eatFood(i, foodIdx int) {
+	if i < 0 || i >= len(t.Fishes) || foodIdx < 0 || foodIdx >= len(t.Foods) {
 		return
 	}
 	f := &t.Fishes[i]
-	fx := f.X + fishW/2
-	fy := f.Y + fishH/2
-	best := 0
-	bestD := math.MaxFloat64
-	for j, food := range t.Foods {
-		d := math.Hypot(food.X-fx, food.Y-fy)
-		if d < bestD {
-			bestD = d
-			best = j
-		}
-	}
-	t.Foods = append(t.Foods[:best], t.Foods[best+1:]...)
+	t.Foods = append(t.Foods[:foodIdx], t.Foods[foodIdx+1:]...)
 	t.bites++
 	text := biteWords[(t.bites-1)%len(biteWords)]
 	mouthX := f.X + fishW
@@ -393,8 +461,29 @@ func (t *Tank) pickWanderTarget(i int) {
 		return
 	}
 	f := &t.Fishes[i]
-	x, y := t.Panel.RandomPoint(t.rng.Float64(), t.rng.Float64(), 10)
-	f.TargetX, f.TargetY = x, y
+	bestX, bestY, bestScore := 0.0, 0.0, -1.0
+	for n := 0; n < 8; n++ {
+		x, y := t.Panel.RandomPoint(t.rng.Float64(), t.rng.Float64(), 10)
+		fx, fy := t.Panel.ClampInside(x-fishW/2, y-fishH/2, fishW, fishH)
+		score := 1e9
+		for j, o := range t.Fishes {
+			if j == i {
+				continue
+			}
+			if fishBoxesOverlap(fx, fy, o.X, o.Y, fishGap) {
+				score = -1
+				break
+			}
+			d := boxSeparation(fx, fy, o.X, o.Y)
+			if d < score {
+				score = d
+			}
+		}
+		if score > bestScore {
+			bestScore, bestX, bestY = score, x, y
+		}
+	}
+	f.TargetX, f.TargetY = bestX, bestY
 	f.Retarget = 1.4 + t.rng.Float64()*2.2
 }
 
@@ -423,6 +512,38 @@ func (t *Tank) clampFish(i int) {
 		return
 	}
 	t.Fishes[i].X, t.Fishes[i].Y = t.Panel.ClampInside(t.Fishes[i].X, t.Fishes[i].Y, fishW, fishH)
+}
+
+func fishBoxesOverlap(ax, ay, bx, by, gap float64) bool {
+	return ax < bx+fishW+gap && bx < ax+fishW+gap && ay < by+fishH+gap && by < ay+fishH+gap
+}
+
+func boxSeparation(ax, ay, bx, by float64) float64 {
+	ox := math.Min(ax+fishW, bx+fishW) - math.Max(ax, bx)
+	oy := math.Min(ay+fishH, by+fishH) - math.Max(ay, by)
+	if ox > 0 && oy > 0 {
+		return -math.Min(ox, oy)
+	}
+	dx, dy := 0.0, 0.0
+	if ox <= 0 {
+		if ax+fishW < bx {
+			dx = bx - (ax + fishW)
+		} else {
+			dx = ax - (bx + fishW)
+		}
+	}
+	if oy <= 0 {
+		if ay+fishH < by {
+			dy = by - (ay + fishH)
+		} else {
+			dy = ay - (by + fishH)
+		}
+	}
+	return math.Hypot(dx, dy)
+}
+
+func fishesOverlap(a, b Fish, eps float64) bool {
+	return a.X < b.X+fishW-eps && b.X < a.X+fishW-eps && a.Y < b.Y+fishH-eps && b.Y < a.Y+fishH-eps
 }
 
 // Sprite returns the facing-appropriate characters for fish i.

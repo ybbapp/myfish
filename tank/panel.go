@@ -4,7 +4,7 @@ import "math"
 
 // Panel is the video-like chassis: a vertical rectangular glass plate
 // with a slight thickness, sitting on a light cyan stand with two legs.
-// Coordinates are in window DIPs.
+// A thin feed strip sits above the plate. Coordinates are in window DIPs.
 type Panel struct {
 	W, H float64
 
@@ -14,12 +14,15 @@ type Panel struct {
 	IX, IY, IW, IH float64 // interior, where fish and food stay
 	PlantY         float64
 
+	FX, FY, FW, FH float64 // click-to-feed strip above the plate
+
 	BX, BY, BW, BH float64 // stand platform
 	LegH, LegW     float64
 	Leg1X, Leg2X   float64
 }
 
-// Layout places a vertical plate and stand inside a window of size w×h.
+// Layout places a vertical plate, a feed strip above it, and a stand
+// inside a window of size w×h.
 func Layout(w, h float64) Panel {
 	if w < 200 {
 		w = 200
@@ -30,10 +33,14 @@ func Layout(w, h float64) Panel {
 	p := Panel{W: w, H: h, Thickness: 9}
 	marginL := 22.0
 	marginR := 16.0 + p.Thickness
-	marginT := 26.0
 	marginB := 16.0
-	legH := math.Min(54, h*0.11)
-	baseH := math.Min(64, h*0.125)
+	feedPad := 8.0
+	feedH := 36.0
+	feedGap := 8.0
+	lip := p.Thickness * 0.4
+	marginT := feedPad + feedH + feedGap + lip
+	legH := math.Min(50, h*0.095)
+	baseH := math.Min(34, h*0.065)
 	p.GX = marginL
 	p.GY = marginT
 	p.GW = w - marginL - marginR
@@ -44,6 +51,10 @@ func Layout(w, h float64) Panel {
 	if p.GH < 80 {
 		p.GH = 80
 	}
+	p.FX = p.GX
+	p.FY = feedPad
+	p.FW = p.GW
+	p.FH = feedH
 	inset := 12.0
 	p.IX = p.GX + inset
 	p.IY = p.GY + inset
@@ -51,14 +62,14 @@ func Layout(w, h float64) Panel {
 	p.IH = p.GH - inset*2
 	p.PlantY = p.IY + p.IH - 26
 
-	p.BW = p.GW + p.Thickness + 14
+	p.BW = p.GW + p.Thickness + 28
 	p.BH = baseH
 	p.BX = (w - p.BW) / 2
 	p.BY = p.GY + p.GH
 	p.LegH = legH
-	p.LegW = p.BW * 0.20
-	p.Leg1X = p.BX + p.BW*0.12
-	p.Leg2X = p.BX + p.BW - p.BW*0.12 - p.LegW
+	p.LegW = p.BW * 0.155
+	p.Leg1X = p.BX + p.BW*0.14
+	p.Leg2X = p.BX + p.BW - p.BW*0.14 - p.LegW
 	return p
 }
 
@@ -67,12 +78,17 @@ func (p Panel) ContainsInterior(x, y float64) bool {
 	return x >= p.IX && x <= p.IX+p.IW && y >= p.IY && y <= p.IY+p.IH
 }
 
+// ContainsFeed reports whether (x, y) is on the click-to-feed strip
+// above the plate.
+func (p Panel) ContainsFeed(x, y float64) bool {
+	return x >= p.FX && x <= p.FX+p.FW && y >= p.FY && y <= p.FY+p.FH
+}
+
 // ContainsGlass reports whether (x, y) is on the plate, including thickness.
 func (p Panel) ContainsGlass(x, y float64) bool {
 	if x >= p.GX && x <= p.GX+p.GW && y >= p.GY && y <= p.GY+p.GH {
 		return true
 	}
-	// Right-edge thickness, and a short top lip.
 	if x >= p.GX+p.GW && x <= p.GX+p.GW+p.Thickness && y >= p.GY-p.Thickness*0.35 && y <= p.GY+p.GH {
 		return true
 	}
@@ -96,19 +112,19 @@ func (p Panel) ContainsStand(x, y float64) bool {
 	return false
 }
 
-// ContainsFrame is the visible object: plate plus stand.
+// ContainsFrame is the interactive object: feed strip, plate, and stand.
 func (p Panel) ContainsFrame(x, y float64) bool {
-	return p.ContainsGlass(x, y) || p.ContainsStand(x, y)
+	return p.ContainsFeed(x, y) || p.ContainsGlass(x, y) || p.ContainsStand(x, y)
 }
 
-// FrameBounds is a tight rectangle around the plate and stand.
+// FrameBounds is a tight rectangle around the feed strip, plate, and stand.
 func (p Panel) FrameBounds() (x, y, w, h float64) {
-	x = math.Min(p.GX, p.BX)
-	y = p.GY - p.Thickness*0.35
+	x = math.Min(p.GX, math.Min(p.BX, p.FX))
+	y = math.Min(p.FY, p.GY-p.Thickness*0.35)
 	if y < 0 {
 		y = 0
 	}
-	right := math.Max(p.GX+p.GW+p.Thickness, p.BX+p.BW)
+	right := math.Max(p.GX+p.GW+p.Thickness, math.Max(p.BX+p.BW, p.FX+p.FW))
 	bottom := p.BY + p.BH + p.LegH
 	return x, y, right - x, bottom - y
 }

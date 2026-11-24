@@ -25,6 +25,7 @@ const (
 	windowW   = 420
 	windowH   = 520
 	dragLabel = "DRAG"
+	feedLabel = "FEED"
 )
 
 type app struct {
@@ -34,6 +35,9 @@ type app struct {
 	last         time.Time
 	pressX       float32
 	pressY       float32
+	ptrX         float32
+	ptrY         float32
+	ptrSeen      bool
 	dragging     bool
 	dragLocalX   float32
 	dragLocalY   float32
@@ -75,10 +79,8 @@ func (a *app) view(c *ui.Context) {
 	c.Root().Background(ui.Transparent)
 
 	pan := a.tank.Panel
+	feedHot := false
 	stage := ui.Box(c).Fill()
-	stage.Draw(func(p *ui.Painter, r ui.Rect) {
-		drawChassis(p, pan)
-	})
 	stage.HitTest(func(x, y float32, r ui.Rect) bool {
 		return pan.ContainsFrame(float64(x), float64(y))
 	})
@@ -86,11 +88,24 @@ func (a *app) view(c *ui.Context) {
 		if ev.Kind == ui.InputPointerDown {
 			a.pressX, a.pressY = ev.X, ev.Y
 		}
+		if ev.Kind == ui.InputPointerMove || ev.Kind == ui.InputPointerDown || ev.Kind == ui.InputPointerUp {
+			a.ptrX, a.ptrY = ev.X, ev.Y
+			a.ptrSeen = true
+		}
+		// Hover tracking must not consume the event or it would swallow clicks.
 		return false
 	})
-	if stage.Clicked() && !a.clickThrough && pan.ContainsInterior(float64(a.pressX), float64(a.pressY)) {
-		a.tank.DropFood(float64(a.pressX), float64(a.pressY))
+	if a.ptrSeen && stage.Hovered() && pan.ContainsGlass(float64(a.ptrX), float64(a.ptrY)) {
+		a.tank.SetHover(float64(a.ptrX), float64(a.ptrY))
+	} else if a.tank.Hovering && !(stage.Hovered() && pan.ContainsGlass(float64(a.ptrX), float64(a.ptrY))) {
+		a.tank.ClearHover()
 	}
+	if a.ptrSeen && stage.Hovered() && pan.ContainsFeed(float64(a.ptrX), float64(a.ptrY)) {
+		feedHot = true
+	}
+	stage.Draw(func(p *ui.Painter, r ui.Rect) {
+		drawChassis(p, pan, feedHot)
+	})
 
 	for i, pl := range a.tank.Plants {
 		glowText(c, pl.Text, fmt.Sprintf("plant-%d", i), plantFontSize, colorPlant, colorPlantGlow, pl.X, pl.Y)
@@ -119,8 +134,32 @@ func (a *app) view(c *ui.Context) {
 			Absolute().Left(float32(ch.X)).Top(float32(ch.Y))
 	}
 
-	// The stand is the drag area (official DragWindow was not observed
-	// to move this frameless window on Linux; SetPosition follows the pointer).
+	hint := colorFeedHint
+	if feedHot {
+		hint = colorFeedHintHot
+	}
+	feed := ui.Box(c).Key("feed-hit").
+		Absolute().Left(float32(pan.FX)).Top(float32(pan.FY)).
+		Size(float32(pan.FW), float32(pan.FH)).
+		Cursor(ui.CursorPointer).
+		HandleInput(func(ev ui.InputEvent) bool {
+			if ev.Kind == ui.InputPointerDown {
+				// InputEvent X/Y are local to this box.
+				a.pressX, a.pressY = ev.X+float32(pan.FX), ev.Y+float32(pan.FY)
+			}
+			return false
+		})
+	if feed.Clicked() && !a.clickThrough {
+		a.tank.FeedFromAbove(float64(a.pressX), float64(a.pressY))
+	}
+	ui.Text(c, feedLabel).Key("feed-hint").
+		Font("monospace").FontSize(11).Bold().
+		TextColor(hint).
+		Absolute().Left(float32(pan.FX + pan.FW/2 - 16)).Top(float32(pan.FY + pan.FH*0.28))
+
+	// The stand is the drag area. Official DragWindow and SetPosition
+	// were both observed not to move this frameless window on Linux;
+	// the path is kept but not claimed to work.
 	ui.Box(c).Key("drag").
 		Absolute().Left(float32(pan.BX)).Top(float32(pan.BY)).
 		Size(float32(pan.BW), float32(pan.BH+pan.LegH)).
