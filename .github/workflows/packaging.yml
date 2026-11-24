@@ -1,0 +1,141 @@
+# Build installable packages on official GitHub-hosted runners.
+# macOS: whole-bundle ad-hoc codesign + codesign --verify --strict --deep.
+#   This is not Developer ID signing and is not notarization.
+# Windows: official MyGo NSIS Setup.exe, then install / start / uninstall
+#   on windows-latest (amd64). arm64 Setup is built but not installed here.
+# Artifacts are uploaded for a later preview.2 release decision.
+# This workflow does not create or overwrite GitHub Releases or tags.
+name: Packaging
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: macOS ad-hoc sign and verify
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build macOS apps
+        env:
+          CGO_ENABLED: "0"
+        run: go tool mygo build -platform darwin/arm64,darwin/amd64 -skip-notarize -o dist/macos
+      - name: Strict-verify bundle signatures
+        run: |
+          set -euo pipefail
+          mapfile -t apps < <(find dist/macos -name '*.app' -type d)
+          if [ "${#apps[@]}" -lt 1 ]; then
+            echo "no .app bundles found" >&2
+            find dist/macos -print >&2
+            exit 1
+          fi
+          for app in "${apps[@]}"; do
+            echo "::group::codesign $app"
+            if [ ! -f "$app/Contents/_CodeSignature/CodeResources" ]; then
+              echo "missing CodeResources in $app" >&2
+              exit 1
+            fi
+            codesign --verify --strict --deep --verbose=4 "$app"
+            codesign -dvv --strict "$app"
+            info="$(codesign -d --verbose=4 "$app" 2>&1 || true)"
+            echo "$info"
+            echo "$info" | grep -q 'Identifier=app.ybbapp.desktopfish'
+            # Reject executable-only linker signatures that caused the
+            # "app is damaged" Gatekeeper alert after a browser download.
+            if echo "$info" | grep -q 'flags=.*linker-signed'; then
+              if ! echo "$info" | grep -q 'Sealed Resources version='; then
+                echo "linker-signed without sealed resources: $app" >&2
+                exit 1
+              fi
+            fi
+            echo "::endgroup::"
+          done
+      - name: Upload macOS packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-packages
+          if-no-files-found: error
+          path: dist/macos
+
+  windows:
+    name: Windows Setup and install test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Cache MyGo NSIS
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/mygo/nsis-*
+          key: nsis-mygo-0.10.0
+      - name: Build Windows apps and Setup.exe
+        env:
+          CGO_ENABLED: "0"
+        run: go tool mygo build -platform windows/amd64,windows/arm64 -o dist/windows
+      - name: Assert Setup.exe exist for both architectures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem -Recurse dist/windows | Select-Object FullName, Length
+          $amd = Get-ChildItem -Recurse dist/windows -Filter 'myfish-setup-0.1.0-amd64.exe' | Select-Object -First 1
+          $arm = Get-ChildItem -Recurse dist/windows -Filter 'myfish-setup-0.1.0-arm64.exe' | Select-Object -First 1
+          if (-not $amd) { throw 'missing myfish-setup-0.1.0-amd64.exe' }
+          if (-not $arm) { throw 'missing myfish-setup-0.1.0-arm64.exe' }
+          # Real NSIS installer, not a renamed zip.
+          $bytes = [System.IO.File]::ReadAllBytes($amd.FullName)
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes[0..Math.Min(4096, $bytes.Length-1)])
+          if ($ascii -notmatch 'Nullsoft') { throw "amd64 setup does not look like NSIS: $($amd.FullName)" }
+          Write-Host "amd64=$($amd.FullName) size=$($amd.Length)"
+          Write-Host "arm64=$($arm.FullName) size=$($arm.Length)"
+          "SETUP_AMD64=$($amd.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install, start, and uninstall amd64 Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = $env:SETUP_AMD64
+          $instDir = Join-Path $env:LOCALAPPDATA 'Programs\MyFish'
+          $exe = Join-Path $instDir '小鱼缸.exe'
+          $unins = Join-Path $instDir 'Uninstall.exe'
+          Write-Host "Installing silently: $setup"
+          $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exit $($p.ExitCode)" }
+          if (-not (Test-Path -LiteralPath $exe)) { throw "app not installed at $exe" }
+          if (-not (Test-Path -LiteralPath $unins)) { throw "Uninstall.exe missing" }
+          $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\小鱼缸.lnk'
+          if (-not (Test-Path -LiteralPath $startMenu)) {
+            $alts = Get-ChildItem -Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') -Filter '*.lnk' | Select-Object -ExpandProperty Name
+            Write-Host "Start menu entries: $alts"
+            if (-not (Test-Path -LiteralPath $startMenu)) { throw "Start menu shortcut missing: $startMenu" }
+          }
+          $startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
+          $auto = @()
+          if (Test-Path $startup) { $auto = Get-ChildItem $startup -Filter '*鱼*' -ErrorAction SilentlyContinue }
+          if ($auto.Count -gt 0) { throw "unexpected startup shortcut: $($auto.Name)" }
+          Write-Host "Starting app briefly"
+          $proc = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 8
+          $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+          if (-not $alive) { throw "process exited early (code $($proc.ExitCode))" }
+          Stop-Process -Id $proc.Id -Force
+          Start-Sleep -Seconds 2
+          Write-Host "Uninstalling silently"
+          $u = Start-Process -FilePath $unins -ArgumentList '/S' -Wait -PassThru
+          if ($u.ExitCode -ne 0) { throw "uninstaller exit $($u.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (Test-Path -LiteralPath $exe) { throw "app still present after uninstall" }
+          if (Test-Path -LiteralPath $startMenu) { throw "Start menu shortcut still present after uninstall" }
+          Write-Host "amd64 install/start/uninstall passed"
+          Write-Host "arm64 Setup was built but not executed on this amd64 runner"
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          if-no-files-found: error
+          path: dist/windows

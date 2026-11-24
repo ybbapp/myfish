@@ -1,6 +1,14 @@
 {
   "name": "小鱼缸",
+  "slug": "myfish",
   "identifier": "app.ybbapp.desktopfish",
   "version": "0.1.0",
-  "out": "/workspace/mygo-fish-artifacts/packages"
+  "out": "dist",
+  "macos": {
+    "minimumSystemVersion": "13.0",
+    "signingIdentity": "-"
+  },
+  "windows": {
+    "installDirName": "MyFish"
+  }
 }

@@ -57,19 +57,23 @@ go run .
 - **玻璃设置原生验证未完成**：894b99b 的补拍录屏 `settings-proof.mp4` 损坏（缺少 moov），录制及鱼缸进程均已不在，运行日志也未留存，不能确定退出原因或宣称设置实机验收通过。对报告的深色→透明度59%→高光80%→浅色→真透明→高光30%操作，生产设置视图的 headless 测试可完成且不会请求 quit；这不能替代原生窗口稳定性验证。另复现了原340高设置窗“关闭”按钮位于窗外的问题，已将高度增至400并验证可点击；不将此说成已修复退出。
 - **拖动（Linux）**：在本机多次实测中，官方 `DragWindow()` 和随后的 `Window.SetPosition` 跟随指针**都未能移动**这个透明无边框窗口。这是已知限制，**不宣称已修好**，本轮不再为此打磨。
 - **托盘**：已装 `libayatana-appindicator3-1`，但本机 `xfce4-panel` 没有 systray/StatusNotifier 插件，会话总线也没有 `org.kde.StatusNotifierWatcher`，面板上仍可能无图标。当前桌面未提供托盘支持，不能作为本机已验收功能。Linux 上关闭窗口会退出，以免隐藏后找不到窗口。
-- macOS / Windows 仅编译通过（若产物目录里有对应包），未在对应系统实测。透明、投食、悬停、拖动和托盘在这两套系统上都还没有运行证据。
+- **macOS 打开（preview.1）**：从 GitHub 下载的 zip 在 macOS 上可能提示“小鱼缸.app 已损坏，无法打开。你应该将它移到废纸篓。”这通常不是文件损坏，而是交叉编译包只有链接器级签名（或完全无签名），Gatekeeper 在带隔离属性时会这样提示。preview.2 起改为在官方 macOS runner 上对整个 `.app` 做 ad-hoc 包签名，并用 `codesign --verify --strict --deep` 校验。**这不是 Developer ID，也不是公证**，仍可能出现“无法验证开发者”之类提示，可在系统设置的隐私与安全性中选择仍要打开。需要 macOS 13 或更高版本。
+- **Windows 安装（preview.1）**：该版本只提供 zip，没有 Setup。preview.2 起由 MyGo 的 NSIS 生成 `myfish-setup-<version>-<arch>.exe`：当前用户目录安装（无需管理员）、开始菜单快捷方式、完成页可选桌面快捷方式、系统设置中可卸载，默认不开机启动。安装器未做可信代码签名，SmartScreen 可能报警，这不是不提供安装器的理由。
+- macOS / Windows 上的透明、投食、悬停、拖动和托盘交互仍以各平台实机证据为准，不能用交叉编译成功代替验收。
 
-## 测试与编译
+## 安装包
+
+正式安装包由 GitHub Actions 在官方托管 runner 上构建，产物作为 workflow 工件上传，再按版本发布：
+
+- macOS 13+：在 `macos-latest` 上构建 `.app` / `.dmg`，整包 ad-hoc 签名并 `codesign --verify --strict --deep`。不是 Developer ID，也未公证。
+- Windows：在 `windows-latest` 上构建 `myfish-setup-0.1.0-amd64.exe` 与 `myfish-setup-0.1.0-arm64.exe`（MyGo + NSIS，不是 zip 改名）。安装到 `%LOCALAPPDATA%\Programs\MyFish`，无需管理员；开始菜单会创建快捷方式，完成页可选择桌面快捷方式；静默安装 `/S` 不创建桌面快捷方式。卸载程序会出现在系统设置中。默认不会写入开机启动。amd64 安装器会在该 runner 上做安装、短暂启动和卸载；arm64 安装器会构建，但不会在 amd64 runner 上执行安装。
 
 ```sh
 gofmt -w .
 go test ./...
 go vet ./...
-go build -o /workspace/mygo-fish-artifacts/mygo-desktop-fish-linux-amd64 .
+# Linux 开发构建：
+go tool mygo build -platform linux/amd64 -o dist
 ```
 
-源码目录：`/workspace/mygo-desktop-fish`  
-Linux 二进制：`/workspace/mygo-fish-artifacts/mygo-desktop-fish-linux-amd64`  
-源码包：`/workspace/mygo-fish-artifacts/mygo-desktop-fish-src.zip`
-
-未修改 `ybbapp/mygo`、ArcMD 或其他已有仓库；此工作副本不推送 GitHub，发布交由负责人执行。
+源码仓库：[ybbapp/myfish](https://github.com/ybbapp/myfish)。
