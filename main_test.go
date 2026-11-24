@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"path/filepath"
 	"testing"
@@ -515,5 +516,53 @@ func TestFinishResizeStopsAndCanPersist(t *testing.T) {
 	}
 	if math.Abs(got.Scale-1.1) > 1e-9 {
 		t.Fatalf("persisted scale %v want 1.1", got.Scale)
+	}
+}
+
+func TestFishSpritesStayOneLineAtEachScale(t *testing.T) {
+	for _, scale := range []float64{minScale, 0.55, defaultScale, maxScale} {
+		t.Run(fmt.Sprintf("scale-%.2f", scale), func(t *testing.T) {
+			assertFishSpriteOneLine(t, scale, tank.StartSize)
+			assertFishSpriteOneLine(t, scale, tank.MaxSize)
+		})
+	}
+}
+
+func assertFishSpriteOneLine(t *testing.T, scale, size float64) {
+	t.Helper()
+	a := newApp()
+	a.settings.Scale = scale
+	p := a.tank.Panel
+	if len(a.tank.Fishes) < 2 {
+		t.Fatalf("need at least two fish, got %d", len(a.tank.Fishes))
+	}
+	a.tank.Fishes = a.tank.Fishes[:2]
+	a.tank.Foods = nil
+	a.tank.Bubbles = nil
+	a.tank.Chomps = nil
+	place := func(f *tank.Fish, facing, y float64) {
+		f.VX, f.VY = 0, 0
+		f.Facing = facing
+		f.Size = size
+		f.Swell = 1
+		f.State = tank.LifeSwim
+		f.X, f.Y = p.ClampInside(p.IX+p.IW, y, f.W(), f.H())
+	}
+	place(&a.tank.Fishes[0], -1, p.IY+40)
+	place(&a.tank.Fishes[1], 1, p.IY+140)
+	tt := testView(a)
+	font := float64(tankFontSize(float64(fishFontSize)*size, scale))
+	for _, sprite := range []string{tank.SpriteLeft, tank.SpriteRight} {
+		r, ok := tt.Find(sprite)
+		if !ok {
+			t.Fatalf("scale %v size %v: missing %q in %q", scale, size, sprite, tt.Texts())
+		}
+		t.Logf("scale %v size %v %q box=%.1f,%.1f %.1fx%.1f font=%.2f", scale, size, sprite, r.X, r.Y, r.W, r.H, font)
+		if r.H > float32(font)*1.85 {
+			t.Errorf("scale %v size %v sprite %q height %.2f is taller than one line (font %.2f); characters likely wrapped", scale, size, sprite, r.H, font)
+		}
+		if r.W < float32(font)*3 {
+			t.Errorf("scale %v size %v sprite %q width %.2f is too narrow for a 7-character fish (font %.2f)", scale, size, sprite, r.W, font)
+		}
 	}
 }

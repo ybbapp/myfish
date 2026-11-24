@@ -97,6 +97,45 @@ func controlFontSize(size, scale float64) float32 {
 	return s
 }
 
+// tankFontSize is the DIP size for fish, plants, bubbles, food and chomps.
+// At 55% and above it matches scaledFontSize, so the 75% default look is
+// unchanged. Below the former 55% minimum, sizes snap to a whole DIP and
+// an adult 24 DIP glyph is kept at least 9 DIP so a 7-character sprite
+// stays a readable monospaced run. Juvenile sizes stay proportional to
+// VisualScale (the floor shrinks with the design size).
+func tankFontSize(size, scale float64) float32 {
+	s := float64(scaledFontSize(size, scale))
+	if clampScale(scale) >= 0.55 {
+		return float32(s)
+	}
+	s = math.Round(s)
+	min := 9 * size / float64(fishFontSize)
+	if min < 1 {
+		min = 1
+	}
+	if s < min {
+		s = min
+	}
+	return float32(s)
+}
+
+// tankTextBold reports whether tank glyphs should be drawn bold. Below
+// 12 DIP, fake-bold plus the glow stroke collapses "><(((o>" into a blot.
+func tankTextBold(size, scale float64) bool {
+	return tankFontSize(size, scale) >= 12
+}
+
+// glowStroke is the DIP width of the glow around tank glyphs. A 0.7 DIP
+// floor used to exceed the 35% proportional stroke (~0.40) and overpower
+// the 8–9 DIP font. 75% and 125% values are unchanged.
+func glowStroke(scale float64) float32 {
+	stroke := 1.15 * clampScale(scale)
+	if stroke < 0.35 {
+		stroke = 0.35
+	}
+	return float32(stroke)
+}
+
 type workArea struct {
 	X, Y, Width, Height int
 }

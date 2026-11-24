@@ -175,11 +175,15 @@ func (a *app) view(c *ui.Context) {
 		if fade > 0.35 {
 			fade = 0.65 + 0.35*fade
 		}
-		ui.Text(c, ch.Text).Key(fmt.Sprintf("chomp-%d", ch.ID)).
-			Font("monospace").FontSize(scaledFontSize(chompFontSize, scale)).Bold().
+		chomp := ui.Text(c, ch.Text).Key(fmt.Sprintf("chomp-%d", ch.ID)).
+			Font("monospace").FontSize(tankFontSize(chompFontSize, scale)).
 			TextColor(colorChomp).TextStroke(scaledFontSize(1.1, scale), colorChompEdge).
+			NoWrap().
 			Opacity(float32(fade)).
 			Absolute().Left(float32(dipX(ch.X, scale))).Top(float32(dipY(ch.Y, scale)))
+		if tankTextBold(chompFontSize, scale) {
+			chomp.Bold()
+		}
 	}
 
 	hint := colorFeedHint
@@ -290,6 +294,7 @@ func (a *app) view(c *ui.Context) {
 	ui.Text(c, feedLabel).Key("feed-hint").
 		Font("monospace").FontSize(controlFontSize(11, scale)).Bold().
 		TextColor(hint).
+		NoWrap().
 		Absolute().Left(float32(dipX(pan.FX+pan.FW/2-16, scale))).Top(float32(dipY(pan.FY+pan.FH*0.28, scale)))
 
 	// The stand is the drag area. Official DragWindow and SetPosition
@@ -318,6 +323,7 @@ func (a *app) view(c *ui.Context) {
 	ui.Text(c, dragLabel).Key("drag-label").
 		Font("monospace").FontSize(controlFontSize(handleFontSize, scale)).Bold().
 		TextColor(colorHandleMute).
+		NoWrap().
 		Absolute().Left(float32(dipX(pan.BX+pan.BW/2-18, scale))).Top(float32(dipY(pan.BY+pan.BH*0.35, scale)))
 
 	setW, setH := setRect.W, setRect.H
@@ -349,6 +355,7 @@ func (a *app) view(c *ui.Context) {
 	setLabelEl := ui.Text(c, setLabel).Key("set-label").
 		Font("monospace").FontSize(controlFontSize(handleFontSize, scale)).Bold().
 		TextColor(colorHandleMute).
+		NoWrap().
 		Absolute().Left(float32(setX + max(4*scale, 4))).Top(float32(setY + max(1*scale, 2)))
 	if set.Clicked() || setLabelEl.Clicked() {
 		a.openSettings()

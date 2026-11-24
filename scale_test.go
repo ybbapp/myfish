@@ -226,3 +226,74 @@ func TestClampPositionToWorkArea(t *testing.T) {
 		t.Fatalf("empty area should be a no-op, got %d,%d", x, y)
 	}
 }
+
+func TestTankGlyphMetricsAtEachScale(t *testing.T) {
+	// 75%% and 125%% must stay the sizes the tank already shipped, so the
+	// default look does not change. 35%% gets a 9 DIP adult floor and a
+	// proportional stroke instead of the old 0.7 DIP stroke floor.
+	type point struct {
+		scale    float64
+		fish     float32
+		plant    float32
+		bubble   float32
+		food     float32
+		control  float32
+		stroke   float32
+		fishBold bool
+	}
+	want := []point{
+		{0.35, 9, 9.0 * 22 / 24, 9.0 * 18 / 24, 9.0 * 20 / 24, 10, 0.35 * 1.15, false},
+		{0.55, 24 * 0.55, 22 * 0.55, 18 * 0.55, 20 * 0.55, 13 * 0.55, 0.55 * 1.15, true},
+		{0.75, 18, 22 * 0.75, 18 * 0.75, 20 * 0.75, 13 * 0.75, 0.75 * 1.15, true},
+		{1.25, 30, 22 * 1.25, 18 * 1.25, 20 * 1.25, 13 * 1.25, 1.25 * 1.15, true},
+	}
+	for _, w := range want {
+		if got := tankFontSize(fishFontSize, w.scale); !floatNear(float64(got), float64(w.fish)) {
+			t.Errorf("scale %v fish font %v, want %v", w.scale, got, w.fish)
+		}
+		if got := tankFontSize(plantFontSize, w.scale); !floatNear(float64(got), float64(w.plant)) {
+			t.Errorf("scale %v plant font %v, want %v", w.scale, got, w.plant)
+		}
+		if got := tankFontSize(bubbleFontSize, w.scale); !floatNear(float64(got), float64(w.bubble)) {
+			t.Errorf("scale %v bubble font %v, want %v", w.scale, got, w.bubble)
+		}
+		if got := tankFontSize(foodFontSize, w.scale); !floatNear(float64(got), float64(w.food)) {
+			t.Errorf("scale %v food font %v, want %v", w.scale, got, w.food)
+		}
+		if got := controlFontSize(handleFontSize, w.scale); !floatNear(float64(got), float64(w.control)) {
+			t.Errorf("scale %v SET font %v, want %v", w.scale, got, w.control)
+		}
+		if got := glowStroke(w.scale); !floatNear(float64(got), float64(w.stroke)) {
+			t.Errorf("scale %v stroke %v, want %v", w.scale, got, w.stroke)
+		}
+		if got := tankTextBold(fishFontSize, w.scale); got != w.fishBold {
+			t.Errorf("scale %v fish bold %v, want %v", w.scale, got, w.fishBold)
+		}
+		// 75%% / 125%% tank fonts must match the raw scaled size exactly.
+		if w.scale >= 0.55 {
+			if tankFontSize(fishFontSize, w.scale) != scaledFontSize(fishFontSize, w.scale) {
+				t.Errorf("scale %v tank fish font diverged from scaledFontSize", w.scale)
+			}
+		}
+	}
+	// A juvenile at 35%% must not inherit the adult 9 DIP floor.
+	baby := tankFontSize(float64(fishFontSize)*0.32, minScale)
+	if baby >= 9 {
+		t.Fatalf("35%% newborn font %v should stay smaller than the adult floor", baby)
+	}
+	// A max-size adult at 35%% stays slightly above the 9 DIP floor.
+	grown := tankFontSize(float64(fishFontSize)*1.2, minScale)
+	if grown < 9 {
+		t.Fatalf("35%% max-size fish font %v, want at least 9", grown)
+	}
+	if minScale != 0.35 {
+		t.Fatalf("minScale %v, typography fix must not raise the 35%% minimum", minScale)
+	}
+}
+
+func floatNear(a, b float64) bool {
+	if a > b {
+		return a-b < 1e-5
+	}
+	return b-a < 1e-5
+}
