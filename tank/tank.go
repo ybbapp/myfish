@@ -10,30 +10,32 @@ import (
 const (
 	MaxFood     = 8
 	FishCount   = 3
-	maxStep     = 1.0 / 20.0 // cap dt so a stall does not fling the fish
+	maxStep     = 1.0 / 20.0
 	minStep     = 1.0 / 1000.0
-	eatRadius   = 32.0
+	eatRadius   = 28.0
 	foodFall    = 70.0
 	bubbleRise  = 36.0
 	wanderSpeed = 52.0
 	chaseSpeed  = 115.0
-	margin      = 16.0
-	chompLife   = 1.35 // long enough to notice on a screenshot
-	fishW       = 120.0
-	fishH       = 32.0
-	foodW       = 20.0
-	foodH       = 22.0
-	minFishGap  = 96.0
+	chompLife   = 1.35
+	fishW       = 108.0
+	fishH       = 28.0
+	minFishGap  = 80.0
 )
 
-// SpriteRight and SpriteLeft are monospaced character fish.
+// Character sprites follow the reference stills, not a round bowl.
 const (
-	SpriteRight = "><(((*>"
-	SpriteLeft  = "<*)))><"
-	FoodGlyph   = "*"
+	SpriteRight = "><(((o>"
+	SpriteLeft  = "<o)))><"
+	FoodGlyph   = "o"
+	FoodStar    = "*"
+	PlantLeft   = "{~"
+	PlantRight  = "~}"
 )
 
-// Fish is one swimmer in the tank.
+var biteWords = []string{"chomp", "crunch", "gulp"}
+
+// Fish is one swimmer on the plate.
 type Fish struct {
 	ID       int
 	X, Y     float64
@@ -46,8 +48,9 @@ type Fish struct {
 
 // Food falls after a click.
 type Food struct {
-	ID   int
-	X, Y float64
+	ID    int
+	X, Y  float64
+	Glyph string
 }
 
 // Bubble drifts upward.
@@ -60,7 +63,7 @@ type Bubble struct {
 	Wobble float64
 }
 
-// Chomp is a short "chomp" or "gulp" label at a bite.
+// Chomp is a short bite label.
 type Chomp struct {
 	ID   int
 	X, Y float64
@@ -69,63 +72,82 @@ type Chomp struct {
 	Life float64
 }
 
+// Plant is a static green character tuft at the bottom of the plate.
+type Plant struct {
+	X, Y float64
+	Text string
+}
+
 // Tank holds the simulation state.
 type Tank struct {
 	W, H    float64
+	Panel   Panel
 	Fishes  []Fish
 	Foods   []Food
 	Bubbles []Bubble
 	Chomps  []Chomp
+	Plants  []Plant
 	Time    float64
 	nextID  int
 	rng     *rand.Rand
 	bites   int
 }
 
-// New returns a tank of the given size, with several scattered fish and a
-// few bubbles.
+// New returns a tank of the given window size, with several fish, plants,
+// and a few bubbles already on the plate.
 func New(w, h float64, seed int64) *Tank {
-	t := &Tank{W: w, H: h, rng: rand.New(rand.NewSource(seed))}
+	t := &Tank{rng: rand.New(rand.NewSource(seed))}
+	t.applySize(w, h)
 	starts := [][3]float64{
-		{0.16, 0.26, 1},
-		{0.58, 0.50, -1},
-		{0.30, 0.74, 1},
+		{0.18, 0.28, 1},
+		{0.62, 0.48, -1},
+		{0.36, 0.66, 1},
 	}
 	for _, s := range starts {
 		t.nextID++
+		x, y := t.Panel.RandomPoint(s[0], s[1], 8)
+		x, y = t.Panel.ClampInside(x-fishW/2, y-fishH/2, fishW, fishH)
 		t.Fishes = append(t.Fishes, Fish{
 			ID:     t.nextID,
-			X:      clamp(w*s[0], margin, math.Max(margin, w-margin-fishW)),
-			Y:      clamp(h*s[1], margin, math.Max(margin, h-margin-fishH)),
+			X:      x,
+			Y:      y,
 			Facing: s[2],
 		})
 		t.pickWanderTarget(len(t.Fishes) - 1)
 	}
-	for i := 0; i < 7; i++ {
+	p := t.Panel
+	t.Plants = []Plant{
+		{X: p.IX + p.IW*0.18, Y: p.PlantY - 4, Text: PlantLeft},
+		{X: p.IX + p.IW*0.72, Y: p.PlantY - 4, Text: PlantRight},
+	}
+	for i := 0; i < 6; i++ {
 		t.spawnBubble(true)
 	}
 	return t
 }
 
-// Resize updates the world size and keeps entities inside it.
-func (t *Tank) Resize(w, h float64) {
-	if w < 80 {
-		w = 80
-	}
-	if h < 80 {
-		h = 80
-	}
+func (t *Tank) applySize(w, h float64) {
 	t.W, t.H = w, h
+	t.Panel = Layout(w, h)
+}
+
+// Resize updates the window size and keeps entities on the plate.
+func (t *Tank) Resize(w, h float64) {
+	t.applySize(w, h)
 	for i := range t.Fishes {
 		t.clampFish(i)
 	}
 	for i := range t.Foods {
-		t.Foods[i].X = clamp(t.Foods[i].X, margin, t.W-margin)
+		t.Foods[i].X, t.Foods[i].Y = t.Panel.ClampInside(t.Foods[i].X, t.Foods[i].Y, 8, 8)
+	}
+	p := t.Panel
+	if len(t.Plants) >= 2 {
+		t.Plants[0].X, t.Plants[0].Y = p.IX+p.IW*0.18, p.PlantY-4
+		t.Plants[1].X, t.Plants[1].Y = p.IX+p.IW*0.72, p.PlantY-4
 	}
 }
 
-// Step advances the simulation by dt seconds (real time). A long stall is
-// capped so the next frame does not jump.
+// Step advances the simulation by dt seconds (real time).
 func (t *Tank) Step(dt float64) {
 	if dt < minStep {
 		return
@@ -138,9 +160,11 @@ func (t *Tank) Step(dt float64) {
 	alive := t.Foods[:0]
 	for _, f := range t.Foods {
 		f.Y += foodFall * dt
-		if f.Y < t.H-8 {
-			alive = append(alive, f)
+		f.X, f.Y = t.Panel.ClampInside(f.X, f.Y, 8, 8)
+		if f.Y >= t.Panel.PlantY-6 {
+			f.Y = t.Panel.PlantY - 6
 		}
+		alive = append(alive, f)
 	}
 	clear(t.Foods[len(alive):])
 	t.Foods = alive
@@ -152,7 +176,7 @@ func (t *Tank) Step(dt float64) {
 	t.stepBubbles(dt)
 	t.stepChomps(dt)
 
-	if t.rng.Float64() < dt*1.3 && len(t.Bubbles) < 14 {
+	if t.rng.Float64() < dt*1.3 && len(t.Bubbles) < 12 {
 		t.spawnBubble(false)
 	}
 }
@@ -163,8 +187,6 @@ func (t *Tank) stepFish(i int, dt float64) {
 	speed := wanderSpeed
 	if chasing {
 		speed = chaseSpeed
-		// Only the nearest fish aims at the food itself; others take a
-		// stand-off so their sprites do not stack into one string.
 		f.TargetX, f.TargetY = t.spreadAim(i, foodX, foodY)
 	} else {
 		f.Retarget -= dt
@@ -199,8 +221,6 @@ func (t *Tank) stepFish(i int, dt float64) {
 	}
 }
 
-// spreadAim keeps fish that share a food from aiming at the same point.
-// The closest fish heads for the food; others approach from the side.
 func (t *Tank) spreadAim(i int, foodX, foodY float64) (x, y float64) {
 	closest := i
 	best := math.MaxFloat64
@@ -233,9 +253,8 @@ func (t *Tank) spreadAim(i int, foodX, foodY float64) (x, y float64) {
 	if n < 1 {
 		n = 1
 	}
-	// Place extras around the food, away from the eater's approach.
 	ang := math.Pi*0.55 + 2*math.Pi*float64(rank)/float64(n)
-	r := 58.0
+	r := 40.0
 	return foodX + math.Cos(ang)*r, foodY + math.Sin(ang)*r
 }
 
@@ -267,11 +286,18 @@ func (t *Tank) separateFish(dt float64) {
 
 func (t *Tank) stepBubbles(dt float64) {
 	alive := t.Bubbles[:0]
+	top := t.Panel.IY + 6
 	for _, b := range t.Bubbles {
 		b.Phase += dt
 		b.Y -= b.Speed * dt
-		b.X += math.Sin(b.Phase*1.7+b.Wobble) * 10 * dt
-		if b.Y+16 > 0 {
+		b.X += math.Sin(b.Phase*1.7+b.Wobble) * 8 * dt
+		if b.X < t.Panel.IX+4 {
+			b.X = t.Panel.IX + 4
+		}
+		if b.X > t.Panel.IX+t.Panel.IW-12 {
+			b.X = t.Panel.IX + t.Panel.IW - 12
+		}
+		if b.Y > top {
 			alive = append(alive, b)
 		}
 	}
@@ -292,15 +318,21 @@ func (t *Tank) stepChomps(dt float64) {
 	t.Chomps = alive
 }
 
-// DropFood places a piece of food at (x, y) if under the limit.
+// DropFood places food at (x, y) if the point is on the plate interior.
 func (t *Tank) DropFood(x, y float64) bool {
 	if len(t.Foods) >= MaxFood {
 		return false
 	}
-	x = clamp(x, margin, t.W-margin)
-	y = clamp(y, margin, t.H-margin)
+	if !t.Panel.ContainsInterior(x, y) {
+		return false
+	}
+	x, y = t.Panel.ClampInside(x-4, y-4, 8, 8)
 	t.nextID++
-	t.Foods = append(t.Foods, Food{ID: t.nextID, X: x, Y: y})
+	glyph := FoodGlyph
+	if t.rng.Intn(3) == 0 {
+		glyph = FoodStar
+	}
+	t.Foods = append(t.Foods, Food{ID: t.nextID, X: x, Y: y, Glyph: glyph})
 	return true
 }
 
@@ -341,10 +373,7 @@ func (t *Tank) eatNearest(i int) {
 	}
 	t.Foods = append(t.Foods[:best], t.Foods[best+1:]...)
 	t.bites++
-	text := "chomp"
-	if t.bites%2 == 0 {
-		text = "gulp"
-	}
+	text := biteWords[(t.bites-1)%len(biteWords)]
 	mouthX := f.X + fishW
 	if f.Facing < 0 {
 		mouthX = f.X
@@ -364,22 +393,23 @@ func (t *Tank) pickWanderTarget(i int) {
 		return
 	}
 	f := &t.Fishes[i]
-	f.TargetX = margin + fishW/2 + t.rng.Float64()*(t.W-2*margin-fishW)
-	f.TargetY = margin + fishH/2 + t.rng.Float64()*(t.H-2*margin-fishH)
+	x, y := t.Panel.RandomPoint(t.rng.Float64(), t.rng.Float64(), 10)
+	f.TargetX, f.TargetY = x, y
 	f.Retarget = 1.4 + t.rng.Float64()*2.2
 }
 
 func (t *Tank) spawnBubble(anywhere bool) {
 	t.nextID++
-	y := t.H + t.rng.Float64()*40
+	var x, y float64
 	if anywhere {
-		y = t.rng.Float64() * t.H
+		x, y = t.Panel.RandomPoint(t.rng.Float64(), t.rng.Float64(), 8)
+	} else {
+		x, y = t.Panel.RandomPoint(0.15+t.rng.Float64()*0.7, 0.88, 8)
 	}
-	// Skip "." — it vanishes on a light desktop.
-	glyphs := []string{"o", "O", "°"}
+	glyphs := []string{"o", "O"}
 	t.Bubbles = append(t.Bubbles, Bubble{
 		ID:     t.nextID,
-		X:      margin + t.rng.Float64()*math.Max(1, t.W-2*margin),
+		X:      x,
 		Y:      y,
 		Speed:  bubbleRise * (0.65 + t.rng.Float64()*0.7),
 		Glyph:  glyphs[t.rng.Intn(len(glyphs))],
@@ -392,8 +422,7 @@ func (t *Tank) clampFish(i int) {
 	if i < 0 || i >= len(t.Fishes) {
 		return
 	}
-	t.Fishes[i].X = clamp(t.Fishes[i].X, margin, math.Max(margin, t.W-margin-fishW))
-	t.Fishes[i].Y = clamp(t.Fishes[i].Y, margin, math.Max(margin, t.H-margin-fishH))
+	t.Fishes[i].X, t.Fishes[i].Y = t.Panel.ClampInside(t.Fishes[i].X, t.Fishes[i].Y, fishW, fishH)
 }
 
 // Sprite returns the facing-appropriate characters for fish i.

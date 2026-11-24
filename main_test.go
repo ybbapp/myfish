@@ -8,11 +8,14 @@ import (
 	"mygo-desktop-fish/tank"
 )
 
-func TestViewShowsFishAndHandle(t *testing.T) {
+func TestViewShowsPlateFishAndHandle(t *testing.T) {
 	a := newApp()
 	tt := ui.NewTester(a.view, windowW, windowH)
 	if !tt.HasText(dragLabel) {
-		t.Errorf("missing drag handle %q, texts %q", dragLabel, tt.Texts())
+		t.Errorf("missing drag label, texts %q", tt.Texts())
+	}
+	if !tt.HasText(tank.PlantLeft) && !tt.HasText(tank.PlantRight) {
+		t.Errorf("missing plants, texts %q", tt.Texts())
 	}
 	n := 0
 	for _, s := range tt.Texts() {
@@ -25,26 +28,35 @@ func TestViewShowsFishAndHandle(t *testing.T) {
 	}
 }
 
-func TestViewClickDropsFood(t *testing.T) {
+func TestViewClickInPlateDropsFood(t *testing.T) {
 	a := newApp()
 	a.tank.Foods = nil
+	p := a.tank.Panel
 	tt := ui.NewTester(a.view, windowW, windowH)
-	tt.ClickAt(280, 200)
+	tt.ClickAt(float32(p.IX+p.IW/2), float32(p.IY+p.IH/3))
 	if len(a.tank.Foods) == 0 {
-		t.Fatalf("click did not drop food, texts %q", tt.Texts())
-	}
-	if !tt.HasText(tank.FoodGlyph) {
-		t.Errorf("missing food glyph, texts %q", tt.Texts())
+		t.Fatalf("click on the plate did not drop food, texts %q", tt.Texts())
 	}
 }
 
-func TestViewClickOnHandleDoesNotDropFood(t *testing.T) {
+func TestViewClickOnStandDoesNotDropFood(t *testing.T) {
+	a := newApp()
+	a.tank.Foods = nil
+	p := a.tank.Panel
+	tt := ui.NewTester(a.view, windowW, windowH)
+	tt.ClickAt(float32(p.BX+p.BW/2), float32(p.BY+p.BH/2))
+	if len(a.tank.Foods) != 0 {
+		t.Fatalf("click on the stand dropped food: %+v", a.tank.Foods)
+	}
+}
+
+func TestViewClickOutsideDoesNotDropFood(t *testing.T) {
 	a := newApp()
 	a.tank.Foods = nil
 	tt := ui.NewTester(a.view, windowW, windowH)
-	tt.ClickAt(dragLeft+dragW/2, dragTop+dragH/2)
+	tt.ClickAt(4, 4)
 	if len(a.tank.Foods) != 0 {
-		t.Fatalf("click on drag handle dropped food: %+v", a.tank.Foods)
+		t.Fatalf("click outside the plate dropped food: %+v", a.tank.Foods)
 	}
 }
 

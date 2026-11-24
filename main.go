@@ -1,7 +1,7 @@
-// Desktop Fish is a small transparent MyGo window: monospaced mid-dark
-// blue character fish, bubbles, and click-to-drop yellow food. It is a
-// software prototype, not a frame-accurate remake of the reference video
-// (that video was not reviewed in this implementation).
+// Desktop Fish is a small MyGo widget: a vertical transparent glass plate
+// on a light cyan stand, with monospaced fish, bubbles and plants on the
+// plate. It is a software prototype based on still frames from a reference
+// video (the video itself was not watched in this implementation).
 package main
 
 import (
@@ -22,36 +22,9 @@ import (
 )
 
 const (
-	windowW = 560
-	windowH = 380
-
-	fishFontSize   = 26
-	bubbleFontSize = 18
-	foodFontSize   = 26
-	chompFontSize  = 18
-	handleFontSize = 16
-
-	dragLeft = 8
-	dragTop  = 8
-	dragW    = 80
-	dragH    = 30
-
-	// ASCII only: a CJK label plus a heavy stroke was hard to read
-	// (halo / ghosting) on the Linux screenshot.
+	windowW   = 420
+	windowH   = 520
 	dragLabel = "DRAG"
-)
-
-var (
-	colorFish       = ui.RGB(16, 82, 180)
-	colorFishStroke = ui.RGB(255, 255, 255)
-	colorBubble     = ui.RGB(36, 118, 186)
-	colorBubStroke  = ui.RGBA(255, 255, 255, 200)
-	colorFood       = ui.RGB(255, 196, 16)
-	colorFoodEdge   = ui.RGB(220, 104, 8)
-	colorChomp      = ui.RGB(255, 210, 40)
-	colorChompEdge  = ui.RGB(20, 40, 80)
-	colorHandle     = ui.RGB(240, 248, 255)
-	colorHandleBg   = ui.RGBA(16, 56, 120, 210)
 )
 
 type app struct {
@@ -92,7 +65,6 @@ func (a *app) view(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyQ) || c.Shortcut(ui.Ctrl|ui.Alt, ui.KeyQ) {
 		a.quit()
 	}
-	// Restore is unconditional: these keys never toggle click-through on.
 	if c.Shortcut(0, ui.KeyEscape) || c.Shortcut(ui.Ctrl|ui.Alt, ui.KeyI) {
 		a.restoreInteraction()
 	}
@@ -102,34 +74,35 @@ func (a *app) view(c *ui.Context) {
 
 	c.Root().Background(ui.Transparent)
 
+	pan := a.tank.Panel
 	stage := ui.Box(c).Fill()
+	stage.Draw(func(p *ui.Painter, r ui.Rect) {
+		drawChassis(p, pan)
+	})
+	stage.HitTest(func(x, y float32, r ui.Rect) bool {
+		return pan.ContainsFrame(float64(x), float64(y))
+	})
 	stage.HandleInput(func(ev ui.InputEvent) bool {
 		if ev.Kind == ui.InputPointerDown {
 			a.pressX, a.pressY = ev.X, ev.Y
 		}
 		return false
 	})
-	if stage.Clicked() && !a.clickThrough && !inDragHandle(a.pressX, a.pressY) {
+	if stage.Clicked() && !a.clickThrough && pan.ContainsInterior(float64(a.pressX), float64(a.pressY)) {
 		a.tank.DropFood(float64(a.pressX), float64(a.pressY))
 	}
 
+	for i, pl := range a.tank.Plants {
+		glowText(c, pl.Text, fmt.Sprintf("plant-%d", i), plantFontSize, colorPlant, colorPlantGlow, pl.X, pl.Y)
+	}
 	for _, b := range a.tank.Bubbles {
-		ui.Text(c, b.Glyph).Key(fmt.Sprintf("bubble-%d", b.ID)).
-			Font("monospace").FontSize(bubbleFontSize).
-			TextColor(colorBubble).TextStroke(1.25, colorBubStroke).
-			Absolute().Left(float32(b.X)).Top(float32(b.Y))
+		glowText(c, b.Glyph, fmt.Sprintf("bubble-%d", b.ID), bubbleFontSize, colorBubble, colorBubbleGlow, b.X, b.Y)
 	}
 	for _, f := range a.tank.Foods {
-		ui.Text(c, tank.FoodGlyph).Key(fmt.Sprintf("food-%d", f.ID)).
-			Font("monospace").FontSize(foodFontSize).Bold().
-			TextColor(colorFood).TextStroke(2, colorFoodEdge).
-			Absolute().Left(float32(f.X - 8)).Top(float32(f.Y - 12))
+		glowText(c, f.Glyph, fmt.Sprintf("food-%d", f.ID), foodFontSize, colorFood, colorFoodEdge, f.X, f.Y)
 	}
 	for _, fish := range a.tank.Fishes {
-		ui.Text(c, fish.Sprite()).Key(fmt.Sprintf("fish-%d", fish.ID)).
-			Font("monospace").FontSize(fishFontSize).Bold().
-			TextColor(colorFish).TextStroke(2, colorFishStroke).
-			Absolute().Left(float32(fish.X)).Top(float32(fish.Y))
+		glowText(c, fish.Sprite(), fmt.Sprintf("fish-%d", fish.ID), fishFontSize, colorFish, colorFishGlow, fish.X, fish.Y)
 	}
 	for _, ch := range a.tank.Chomps {
 		fade := 1 - ch.Age/ch.Life
@@ -141,26 +114,22 @@ func (a *app) view(c *ui.Context) {
 		}
 		ui.Text(c, ch.Text).Key(fmt.Sprintf("chomp-%d", ch.ID)).
 			Font("monospace").FontSize(chompFontSize).Bold().
-			TextColor(colorChomp).TextStroke(1.5, colorChompEdge).
+			TextColor(colorChomp).TextStroke(1.1, colorChompEdge).
 			Opacity(float32(fade)).
 			Absolute().Left(float32(ch.X)).Top(float32(ch.Y))
 	}
 
-	// Official DragWindow() on Linux calls gtk_window_begin_move_drag
-	// only after an 8px move, for undecorated windows. A second Linux
-	// run with a visible handle still did not move the window, so this
-	// handle instead tracks the pointer and uses Window.SetPosition
-	// (works on this X11 session; Wayland compositors may ignore it).
+	// The stand is the drag area (official DragWindow was not observed
+	// to move this frameless window on Linux; SetPosition follows the pointer).
 	ui.Box(c).Key("drag").
-		Absolute().Top(dragTop).Left(dragLeft).Size(dragW, dragH).
-		Radius(8).Background(colorHandleBg).
+		Absolute().Left(float32(pan.BX)).Top(float32(pan.BY)).
+		Size(float32(pan.BW), float32(pan.BH+pan.LegH)).
 		Cursor(ui.CursorMove).
-		HandleInput(a.onDragInput).
-		Children(func() {
-			ui.Text(c, dragLabel).Key("drag-label").
-				Font("monospace").FontSize(handleFontSize).Bold().
-				TextColor(colorHandle)
-		})
+		HandleInput(a.onDragInput)
+	ui.Text(c, dragLabel).Key("drag-label").
+		Font("monospace").FontSize(handleFontSize).Bold().
+		TextColor(colorHandleMute).
+		Absolute().Left(float32(pan.BX + pan.BW/2 - 18)).Top(float32(pan.BY + pan.BH*0.35))
 }
 
 func (a *app) onDragInput(ev ui.InputEvent) bool {
@@ -193,7 +162,7 @@ func (a *app) ready() {
 	var err error
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
 		Icon:           trayIcon(),
-		IconIsTemplate: false, // a black template vanishes on a dark panel
+		IconIsTemplate: false,
 		ToolTip:        "小鱼缸",
 	})
 	if err != nil {
@@ -217,14 +186,12 @@ func (a *app) ready() {
 		Content:           ui.View(a.view),
 	})
 	a.win.OnClose(func(e *mygo.CloseEvent) {
-		// Hide to the tray only when a tray is likely visible. On this
-		// Linux desktop NewTray can succeed with no panel plugin and no
-		// StatusNotifierWatcher, so hiding would lose the window.
 		if !a.quitting && a.tray != nil && runtime.GOOS != "linux" {
 			e.PreventDefault()
 			a.win.Hide()
 		}
 	})
+	a.applyHitRegion()
 	a.syncTrayMenu()
 	if a.tray != nil {
 		mygo.App.OnWillQuit(func(*mygo.QuitEvent) { a.tray.Destroy() })
@@ -232,11 +199,20 @@ func (a *app) ready() {
 	a.bindGlobalShortcuts()
 }
 
+func (a *app) applyHitRegion() {
+	if a.win == nil || a.clickThrough {
+		return
+	}
+	x, y, w, h := a.tank.Panel.FrameBounds()
+	a.win.SetInputRegion([]mygo.Rectangle{{
+		X: int(x), Y: int(y), Width: int(w + 0.5), Height: int(h + 0.5),
+	}})
+}
+
 func (a *app) bindGlobalShortcuts() {
 	type binding struct {
-		keys string
-		desc string
-		fn   func()
+		keys, desc string
+		fn         func()
 	}
 	for _, b := range []binding{
 		{"CmdOrCtrl+Alt+Q", "退出小鱼缸", a.quit},
@@ -288,11 +264,13 @@ func (a *app) setClickThrough(on bool) {
 	a.clickThrough = on
 	if a.win != nil {
 		a.win.SetIgnoreMouseEvents(on)
+		if !on {
+			a.applyHitRegion()
+		}
 	}
 	a.syncTrayMenu()
 }
 
-// restoreInteraction always turns click-through off. It must not toggle.
 func (a *app) restoreInteraction() {
 	a.setClickThrough(false)
 	if a.win != nil {
@@ -313,24 +291,16 @@ func (a *app) quit() {
 	mygo.App.Quit()
 }
 
-func inDragHandle(x, y float32) bool {
-	return x >= dragLeft && x < dragLeft+dragW && y >= dragTop && y < dragTop+dragH
-}
-
 func trayIcon() []byte {
 	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	ink := color.NRGBA{R: 30, G: 120, B: 220, A: 255}
-	for _, r := range []image.Rectangle{
-		image.Rect(4, 14, 22, 19),
-		image.Rect(22, 12, 26, 21),
-		image.Rect(26, 13, 30, 16),
-		image.Rect(26, 17, 30, 20),
-		image.Rect(8, 12, 18, 14),
-		image.Rect(8, 19, 18, 21),
-		image.Rect(18, 15, 20, 17),
-	} {
-		draw.Draw(img, r, image.NewUniform(ink), image.Point{}, draw.Src)
-	}
+	stand := color.NRGBA{R: 164, G: 222, B: 214, A: 255}
+	glass := color.NRGBA{R: 200, G: 230, B: 240, A: 200}
+	ink := color.NRGBA{R: 30, G: 180, B: 210, A: 255}
+	draw.Draw(img, image.Rect(8, 4, 24, 22), image.NewUniform(glass), image.Point{}, draw.Src)
+	draw.Draw(img, image.Rect(6, 20, 26, 26), image.NewUniform(stand), image.Point{}, draw.Src)
+	draw.Draw(img, image.Rect(8, 26, 13, 31), image.NewUniform(stand), image.Point{}, draw.Src)
+	draw.Draw(img, image.Rect(19, 26, 24, 31), image.NewUniform(stand), image.Point{}, draw.Src)
+	draw.Draw(img, image.Rect(11, 11, 21, 15), image.NewUniform(ink), image.Point{}, draw.Src)
 	var b bytes.Buffer
 	_ = png.Encode(&b, img)
 	return b.Bytes()
