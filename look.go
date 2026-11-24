@@ -8,14 +8,9 @@ import (
 
 // MyGo ui.RGBA takes alpha in 0–1 (values >= 1 become fully opaque).
 // An earlier pass passed 0–255, so the plate fill rendered as a solid
-// pale plaque and hid the desktop. The front face is intentionally left
-// unfilled; the plate is defined by edge highlights, the right/top
-// thickness, and the stand.
+// pale plaque and hid the desktop. The default remains a clear front
+// face; the user can add a light or dark tint from the glass settings.
 var (
-	colorGlassEdge   = ui.RGBA(200, 222, 232, 0.85)
-	colorGlassSide   = ui.RGBA(228, 238, 244, 0.20)
-	colorGlassTop    = ui.RGBA(245, 250, 252, 0.22)
-	colorGlassHi     = ui.RGBA(255, 255, 255, 0.70)
 	colorStand       = ui.RGB(164, 222, 214)
 	colorStandDark   = ui.RGB(132, 196, 188)
 	colorStandLight  = ui.RGB(190, 236, 230)
@@ -47,7 +42,7 @@ const (
 	handleFontSize = 13
 )
 
-func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool) {
+func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool, g GlassStyle) {
 	gx, gy, gw, gh, t := float32(pan.GX), float32(pan.GY), float32(pan.GW), float32(pan.GH), float32(pan.Thickness)
 
 	bx, by, bw, bh := float32(pan.BX), float32(pan.BY), float32(pan.BW), float32(pan.BH)
@@ -89,8 +84,8 @@ func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool) {
 	top.LineTo(gx+gw+t, gy-t*0.38)
 	top.LineTo(gx+gw, gy)
 	top.Close()
-	p.FillPath(top, colorGlassTop)
-	p.StrokePath(top, 1, colorGlassEdge)
+	p.FillPath(top, g.Top)
+	p.StrokePath(top, 1, g.Edge)
 
 	side := &ui.Path{}
 	side.MoveTo(gx+gw, gy)
@@ -98,18 +93,21 @@ func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool) {
 	side.LineTo(gx+gw+t, gy+gh-t*0.2)
 	side.LineTo(gx+gw, gy+gh)
 	side.Close()
-	p.FillPath(side, colorGlassSide)
-	p.StrokePath(side, 1, colorGlassEdge)
+	p.FillPath(side, g.Side)
+	p.StrokePath(side, 1, g.Edge)
 
-	// No front fill — the desktop must show through the plate.
+	// FillA 0 keeps the plate truly clear so the desktop shows through.
 	front := ui.Rect{X: gx, Y: gy, W: gw, H: gh}
-	p.Stroke(front, colorGlassEdge, 2, 1.25)
+	if g.FillA > 0.001 {
+		p.Fill(front, g.Fill, 2)
+	}
+	p.Stroke(front, g.Edge, 2, 1.25)
 
 	hi := &ui.Path{}
 	hi.MoveTo(gx+2.5, gy+gh-4)
 	hi.LineTo(gx+2.5, gy+2.5)
 	hi.LineTo(gx+gw-4, gy+2.5)
-	p.StrokePath(hi.Cap(ui.ButtCap), 1.35, colorGlassHi)
+	p.StrokePath(hi.Cap(ui.ButtCap), 1.35, g.Hi)
 }
 
 func glowText(c *ui.Context, s, key string, size float32, fill, glow ui.Color, x, y float64) {

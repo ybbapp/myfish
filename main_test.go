@@ -18,6 +18,9 @@ func TestViewShowsPlateFishHandleAndFeedHint(t *testing.T) {
 	if !tt.HasText(feedLabel) {
 		t.Errorf("missing feed hint, texts %q", tt.Texts())
 	}
+	if !tt.HasText(setLabel) {
+		t.Errorf("missing SET control, texts %q", tt.Texts())
+	}
 	if !tt.HasText(tank.PlantLeft) && !tt.HasText(tank.PlantRight) {
 		t.Errorf("missing plants, texts %q", tt.Texts())
 	}
@@ -183,5 +186,27 @@ func TestToggleClickThroughIsSeparate(t *testing.T) {
 	a.toggleClickThrough()
 	if a.clickThrough {
 		t.Fatal("toggle did not restore interaction")
+	}
+}
+
+func TestViewSetButtonOpensSettings(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.view, windowW, windowH)
+	if err := tt.Click(setLabel); err != nil {
+		t.Fatalf("click SET: %v (texts %q)", err, tt.Texts())
+	}
+	if !a.settingsOpen {
+		r, ok := tt.Find(setLabel)
+		t.Fatalf("clicking SET did not open the glass settings (found=%v rect=%+v)", ok, r)
+	}
+}
+
+func TestSettingsViewListsPresets(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.settingsView, settingsW, settingsH)
+	for _, s := range []string{"真透明（无填充）", "浅色底", "深色底", "自动（跟随系统浅深主题）", "关闭"} {
+		if !tt.HasText(s) {
+			t.Errorf("settings missing %q, texts %q", s, tt.Texts())
+		}
 	}
 }

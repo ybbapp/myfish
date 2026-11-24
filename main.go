@@ -29,28 +29,44 @@ const (
 )
 
 type app struct {
-	win          *mygo.Window
-	tray         *mygo.Tray
-	tank         *tank.Tank
-	last         time.Time
-	pressX       float32
-	pressY       float32
-	ptrX         float32
-	ptrY         float32
-	ptrSeen      bool
-	dragging     bool
-	dragLocalX   float32
-	dragLocalY   float32
-	alwaysOnTop  bool
-	clickThrough bool
-	quitting     bool
-	shortcutsOn  bool
+	win           *mygo.Window
+	tray          *mygo.Tray
+	tank          *tank.Tank
+	last          time.Time
+	pressX        float32
+	pressY        float32
+	ptrX          float32
+	ptrY          float32
+	ptrSeen       bool
+	dragging      bool
+	dragLocalX    float32
+	dragLocalY    float32
+	alwaysOnTop   bool
+	clickThrough  bool
+	quitting      bool
+	shortcutsOn   bool
+	feeder        *tank.Feeder
+	settings      Settings
+	settingsPath  string
+	setWin        *mygo.Window
+	systemDark    bool
+	systemDarkOK  bool
+	lastMode      GlassMode
+	lastOpacity   float64
+	lastHighlight float64
+	settingsOpen  bool
 }
 
 func newApp() *app {
+	s := DefaultSettings()
 	return &app{
-		tank:        tank.New(windowW, windowH, 7),
-		alwaysOnTop: true,
+		tank:          tank.New(windowW, windowH, 7),
+		alwaysOnTop:   true,
+		feeder:        tank.NewFeeder(),
+		settings:      s,
+		lastMode:      s.Mode,
+		lastOpacity:   s.Opacity,
+		lastHighlight: s.Highlight,
 	}
 }
 
@@ -74,6 +90,9 @@ func (a *app) view(c *ui.Context) {
 	}
 	if c.Shortcut(ui.Ctrl|ui.Alt, ui.KeyT) {
 		a.toggleClickThrough()
+	}
+	if c.Shortcut(ui.Ctrl|ui.Alt, ui.KeyG) {
+		a.openSettings()
 	}
 
 	c.Root().Background(ui.Transparent)
@@ -103,8 +122,9 @@ func (a *app) view(c *ui.Context) {
 	if a.ptrSeen && stage.Hovered() && pan.ContainsFeed(float64(a.ptrX), float64(a.ptrY)) {
 		feedHot = true
 	}
+	style := a.settings.Resolve(a.systemDark)
 	stage.Draw(func(p *ui.Painter, r ui.Rect) {
-		drawChassis(p, pan, feedHot)
+		drawChassis(p, pan, feedHot, style)
 	})
 
 	for i, pl := range a.tank.Plants {
@@ -143,14 +163,39 @@ func (a *app) view(c *ui.Context) {
 		Size(float32(pan.FW), float32(pan.FH)).
 		Cursor(ui.CursorPointer).
 		HandleInput(func(ev ui.InputEvent) bool {
-			if ev.Kind == ui.InputPointerDown {
-				// InputEvent X/Y are local to this box.
-				a.pressX, a.pressY = ev.X+float32(pan.FX), ev.Y+float32(pan.FY)
+			if a.clickThrough {
+				return false
 			}
-			return false
+			// InputEvent X/Y are local to this box.
+			x := float64(ev.X + float32(pan.FX))
+			y := float64(ev.Y + float32(pan.FY))
+			in := pan.ContainsFeed(x, y)
+			switch ev.Kind {
+			case ui.InputPointerDown:
+				if ev.Button != 0 {
+					return false
+				}
+				a.pressX, a.pressY = ev.X+float32(pan.FX), ev.Y+float32(pan.FY)
+				a.feeder.Down(now, x, y)
+				return true
+			case ui.InputPointerMove:
+				a.feeder.Move(x, y, in)
+				return a.feeder.Holding()
+			case ui.InputPointerUp:
+				if a.feeder.Up(now, in) {
+					a.tank.FeedFromAbove(a.feeder.X, a.feeder.Y)
+				}
+				return true
+			default:
+				return false
+			}
 		})
-	if feed.Clicked() && !a.clickThrough {
-		a.tank.FeedFromAbove(float64(a.pressX), float64(a.pressY))
+	_ = feed
+	if a.feeder.Holding() {
+		in := pan.ContainsFeed(a.feeder.X, a.feeder.Y)
+		if a.feeder.Tick(now, in) {
+			a.tank.FeedFromAbove(a.feeder.X, a.feeder.Y)
+		}
 	}
 	ui.Text(c, feedLabel).Key("feed-hint").
 		Font("monospace").FontSize(11).Bold().
@@ -160,15 +205,40 @@ func (a *app) view(c *ui.Context) {
 	// The stand is the drag area. Official DragWindow and SetPosition
 	// were both observed not to move this frameless window on Linux;
 	// the path is kept but not claimed to work.
-	ui.Box(c).Key("drag").
+	stand := ui.Box(c).Key("drag").
 		Absolute().Left(float32(pan.BX)).Top(float32(pan.BY)).
 		Size(float32(pan.BW), float32(pan.BH+pan.LegH)).
 		Cursor(ui.CursorMove).
+		HitTest(func(x, y float32, r ui.Rect) bool {
+			// Leave the SET control a click target of its own.
+			if x >= r.W-40 && y <= 24 {
+				return false
+			}
+			return true
+		}).
 		HandleInput(a.onDragInput)
+	if stand.RightClicked() {
+		a.showGlassMenu()
+	}
 	ui.Text(c, dragLabel).Key("drag-label").
 		Font("monospace").FontSize(handleFontSize).Bold().
 		TextColor(colorHandleMute).
 		Absolute().Left(float32(pan.BX + pan.BW/2 - 18)).Top(float32(pan.BY + pan.BH*0.35))
+
+	setX := pan.BX + pan.BW - 40
+	setY := pan.BY + 6
+	set := ui.Box(c).Key("glass-set").
+		Absolute().Left(float32(setX)).Top(float32(setY)).
+		Size(36, 18).
+		Cursor(ui.CursorPointer).
+		HitTest(func(x, y float32, r ui.Rect) bool { return true })
+	setLabelEl := ui.Text(c, setLabel).Key("set-label").
+		Font("monospace").FontSize(handleFontSize).Bold().
+		TextColor(colorHandleMute).
+		Absolute().Left(float32(setX + 4)).Top(float32(setY + 1))
+	if set.Clicked() || setLabelEl.Clicked() {
+		a.openSettings()
+	}
 }
 
 func (a *app) onDragInput(ev ui.InputEvent) bool {
@@ -230,12 +300,36 @@ func (a *app) ready() {
 			a.win.Hide()
 		}
 	})
+	if dir, err := mygo.App.Path(mygo.PathUserData); err != nil {
+		log.Println("user data path:", err)
+	} else {
+		a.settingsPath = settingsPath(dir)
+		if s, err := LoadSettings(a.settingsPath); err != nil {
+			log.Println("load settings:", err)
+		} else {
+			a.settings = s
+			a.lastMode, a.lastOpacity, a.lastHighlight = s.Mode, s.Opacity, s.Highlight
+		}
+	}
+	if dark, ok := tryThemeIsDark(); ok {
+		a.systemDark, a.systemDarkOK = dark, true
+	}
+	mygo.Theme.OnUpdated(func() {
+		if dark, ok := tryThemeIsDark(); ok {
+			a.systemDark, a.systemDarkOK = dark, true
+		}
+	})
+	a.win.OnBlur(func() { a.feeder.Cancel() })
 	a.applyHitRegion()
 	a.syncTrayMenu()
 	if a.tray != nil {
 		mygo.App.OnWillQuit(func(*mygo.QuitEvent) { a.tray.Destroy() })
 	}
 	a.bindGlobalShortcuts()
+}
+
+func tryThemeIsDark() (dark bool, ok bool) {
+	return mygo.Theme.IsDark(), true
 }
 
 func (a *app) applyHitRegion() {
@@ -257,6 +351,7 @@ func (a *app) bindGlobalShortcuts() {
 		{"CmdOrCtrl+Alt+Q", "退出小鱼缸", a.quit},
 		{"CmdOrCtrl+Alt+I", "恢复交互", a.restoreInteraction},
 		{"CmdOrCtrl+Alt+T", "切换鼠标穿透", a.toggleClickThrough},
+		{settingsAccel, "玻璃设置", a.openSettings},
 	} {
 		err := mygo.GlobalShortcut.RegisterWith(b.keys, mygo.GlobalShortcutOptions{Description: b.desc}, b.fn)
 		if err != nil {
@@ -294,6 +389,9 @@ func (a *app) syncTrayMenu() {
 			a.win.SetAlwaysOnTop(a.alwaysOnTop)
 			a.syncTrayMenu()
 		}},
+		{Label: "玻璃设置…", Accelerator: settingsAccel, Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.openSettings()
+		}},
 		mygo.Separator(),
 		{Role: mygo.RoleQuit, Accelerator: "CmdOrCtrl+Q"},
 	}))
@@ -327,6 +425,9 @@ func (a *app) toggleClickThrough() {
 
 func (a *app) quit() {
 	a.quitting = true
+	if a.setWin != nil {
+		a.setWin.Close()
+	}
 	mygo.App.Quit()
 }
 
