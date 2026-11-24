@@ -134,13 +134,12 @@ func (a *app) view(c *ui.Context) {
 		return false
 	})
 	ptrDX, ptrDY := windowToDesign(float64(a.ptrX), float64(a.ptrY), scale)
+	// Glass hover stays approach-only: fish may turn toward the pointer,
+	// but SetHover never drops food.
 	if a.ptrSeen && stage.Hovered() && pan.ContainsGlass(ptrDX, ptrDY) {
 		a.tank.SetHover(ptrDX, ptrDY)
 	} else if a.tank.Hovering && !(stage.Hovered() && pan.ContainsGlass(ptrDX, ptrDY)) {
 		a.tank.ClearHover()
-	}
-	if a.ptrSeen && stage.Hovered() && pan.ContainsFeed(ptrDX, ptrDY) && hoverEdge == resizeNone {
-		feedHot = true
 	}
 	style := a.settings.Resolve(a.systemDark)
 	stage.Draw(func(p *ui.Painter, r ui.Rect) {
@@ -208,6 +207,8 @@ func (a *app) view(c *ui.Context) {
 			wx := float64(ev.X) + feedHit.X
 			wy := float64(ev.Y) + feedHit.Y
 			if ev.Kind == ui.InputPointerDown || ev.Kind == ui.InputPointerUp || ev.Kind == ui.InputPointerMove {
+				a.ptrX, a.ptrY = float32(wx), float32(wy)
+				a.ptrSeen = true
 				a.debugPointer("feed", ev, float32(wx), float32(wy), fmt.Sprintf("foods=%d holding=%v", len(a.tank.Foods), a.feeder.Holding()))
 			}
 			x, y := windowToDesign(wx, wy, scale)
@@ -247,12 +248,44 @@ func (a *app) view(c *ui.Context) {
 				return false
 			}
 		})
-	_ = feed
+	// The FEED box sits on top of the stage fill, so stage.Hovered() is
+	// false here. Use the strip's own hover, then refresh pointer and
+	// highlight (chassis Draw reads feedHot at paint time).
+	ptrDX, ptrDY = windowToDesign(float64(a.ptrX), float64(a.ptrY), scale)
+	if a.ptrSeen && a.resizing == resizeNone {
+		hoverEdge = hitResizeEdge(float64(a.ptrX), float64(a.ptrY), fx, fy, fw, fh, scale, setRect)
+	}
+	inFeed := !a.clickThrough && feed.Hovered() && pan.ContainsFeed(ptrDX, ptrDY) && hoverEdge == resizeNone
+	if inFeed {
+		feedHot = true
+		hint = colorFeedHintHot
+	}
 	if a.feeder.Holding() {
 		in := pan.ContainsFeed(a.feeder.X, a.feeder.Y)
 		if a.feeder.Tick(now, in) {
 			a.tank.FeedFromAbove(a.feeder.X, a.feeder.Y)
 		}
+	} else if inFeed {
+		x, y := ptrDX, ptrDY
+		if x < pan.FX {
+			x = pan.FX
+		}
+		if x > pan.FX+pan.FW {
+			x = pan.FX + pan.FW
+		}
+		if y < pan.FY {
+			y = pan.FY
+		}
+		if y > pan.FY+pan.FH {
+			y = pan.FY + pan.FH
+		}
+		a.feeder.Hover(now, x, y, true)
+		if a.feeder.HoverTick(now, true) {
+			ok := a.tank.FeedFromAbove(a.feeder.X, a.feeder.Y)
+			dbg("feed drop from hover ok=%v foods=%d x=%.1f y=%.1f", ok, len(a.tank.Foods), a.feeder.X, a.feeder.Y)
+		}
+	} else {
+		a.feeder.Hover(now, ptrDX, ptrDY, false)
 	}
 	ui.Text(c, feedLabel).Key("feed-hint").
 		Font("monospace").FontSize(controlFontSize(11, scale)).Bold().

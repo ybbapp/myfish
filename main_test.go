@@ -4,6 +4,7 @@ import (
 	"math"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -99,6 +100,7 @@ func TestViewClickOutsideDoesNotDropFood(t *testing.T) {
 func TestViewHoverDoesNotDropFood(t *testing.T) {
 	a := newApp()
 	a.tank.Foods = nil
+	a.tank.EnableFoodTrace()
 	p := a.tank.Panel
 	tt := testView(a)
 	tt.Move(winXY(a, p.IX+p.IW/2, p.IY+p.IH/3))
@@ -107,6 +109,111 @@ func TestViewHoverDoesNotDropFood(t *testing.T) {
 	}
 	if !a.tank.Hovering {
 		t.Fatal("hover over the plate was not applied")
+	}
+	// Glass hover must stay approach-only even after the feed-strip dwell.
+	tt.Advance(tank.HoverDwell + tank.HoverInterval)
+	tt.Frame()
+	if spawned := a.tank.FoodTrace().Spawned; spawned != 0 || len(a.tank.Foods) != 0 {
+		t.Fatalf("glass hover dropped food after dwell: spawned=%d foods=%d", spawned, len(a.tank.Foods))
+	}
+	if !a.tank.Hovering {
+		t.Fatal("glass hover was cleared while the pointer stayed on the plate")
+	}
+}
+
+func TestViewFeedHoverDropsAfterDwell(t *testing.T) {
+	a := newApp()
+	a.tank.Foods = nil
+	a.tank.EnableFoodTrace()
+	p := a.tank.Panel
+	x := p.FX + p.FW*0.6
+	tt := testView(a)
+	tt.Move(winXY(a, x, p.FY+p.FH/2))
+	if a.tank.FoodTrace().Spawned != 0 {
+		t.Fatal("entering the FEED strip dropped food immediately")
+	}
+	if a.tank.Hovering {
+		t.Fatal("FEED-strip hover should not start glass approach")
+	}
+	tt.Advance(tank.HoverDwell - time.Millisecond)
+	tt.Frame()
+	if a.tank.FoodTrace().Spawned != 0 {
+		t.Fatal("FEED hover dropped food before the dwell")
+	}
+	tt.Advance(time.Millisecond)
+	tt.Frame()
+	if a.tank.FoodTrace().Spawned != 1 {
+		t.Fatalf("FEED hover should drop once after the dwell, spawned=%d", a.tank.FoodTrace().Spawned)
+	}
+	if a.tank.FoodTrace().Spawned == 1 && len(a.tank.Foods) == 1 && math.Abs(a.tank.Foods[0].X+4-x) > 10 {
+		t.Fatalf("hover food x=%v, pointer x=%v", a.tank.Foods[0].X, x)
+	}
+	tt.Advance(tank.HoverInterval)
+	tt.Frame()
+	if a.tank.FoodTrace().Spawned != 2 {
+		t.Fatalf("FEED hover should pulse again after the interval, spawned=%d", a.tank.FoodTrace().Spawned)
+	}
+}
+
+func TestViewFeedHoverPassThroughDoesNotDrop(t *testing.T) {
+	a := newApp()
+	a.tank.Foods = nil
+	a.tank.EnableFoodTrace()
+	p := a.tank.Panel
+	tt := testView(a)
+	tt.Move(winXY(a, p.FX+p.FW/2, p.FY+p.FH/2))
+	tt.Advance(tank.HoverDwell - 20*time.Millisecond)
+	tt.Frame()
+	tt.Move(winXY(a, p.IX+p.IW/2, p.IY+p.IH/3))
+	tt.Advance(tank.HoverDwell + tank.HoverInterval)
+	tt.Frame()
+	if a.tank.FoodTrace().Spawned != 0 {
+		t.Fatalf("a pass-through of the FEED strip dropped food: spawned=%d", a.tank.FoodTrace().Spawned)
+	}
+	if !a.tank.Hovering {
+		t.Fatal("after leaving FEED for the glass, approach hover should be on")
+	}
+}
+
+func TestViewFeedHoverStopsOnLeave(t *testing.T) {
+	a := newApp()
+	a.tank.Foods = nil
+	a.tank.EnableFoodTrace()
+	p := a.tank.Panel
+	tt := testView(a)
+	tt.Move(winXY(a, p.FX+p.FW*0.55, p.FY+p.FH/2))
+	tt.Advance(tank.HoverDwell)
+	tt.Frame()
+	if a.tank.FoodTrace().Spawned != 1 {
+		t.Fatalf("expected one hover drop before leave, spawned=%d", a.tank.FoodTrace().Spawned)
+	}
+	tt.Move(4, 4)
+	if a.feeder.FeedHovering() {
+		t.Fatal("leaving the FEED strip should stop hover feeding immediately")
+	}
+	tt.Advance(tank.HoverInterval * 3)
+	tt.Frame()
+	if a.tank.FoodTrace().Spawned != 1 {
+		t.Fatalf("food kept dropping after leave: spawned=%d", a.tank.FoodTrace().Spawned)
+	}
+}
+
+func TestViewFeedHoverClickStillBursts(t *testing.T) {
+	a := newApp()
+	a.tank.Foods = nil
+	a.tank.EnableFoodTrace()
+	p := a.tank.Panel
+	x := p.FX + p.FW*0.7
+	tt := testView(a)
+	tt.Move(winXY(a, x, p.FY+p.FH/2))
+	tt.Advance(tank.HoverDwell)
+	tt.Frame()
+	if a.tank.FoodTrace().Spawned != 1 {
+		t.Fatalf("expected a hover drop before the click, spawned=%d", a.tank.FoodTrace().Spawned)
+	}
+	tt.ClickAt(winXY(a, x, p.FY+p.FH/2))
+	if a.tank.FoodTrace().Spawned != 2 {
+		t.Fatalf("click on FEED after hover should burst one more drop, spawned=%d", a.tank.FoodTrace().Spawned)
 	}
 }
 
