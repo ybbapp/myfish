@@ -11,29 +11,33 @@ import (
 // pale plaque and hid the desktop. The default remains a clear front
 // face; the user can add a light or dark tint from the glass settings.
 var (
-	colorStand       = ui.RGB(164, 222, 214)
-	colorStandDark   = ui.RGB(132, 196, 188)
-	colorStandLight  = ui.RGB(190, 236, 230)
-	colorStandShadow = ui.RGBA(70, 120, 116, 0.22)
-	colorFish        = ui.RGB(28, 196, 220)
-	colorFishGlow    = ui.RGBA(170, 240, 255, 0.45)
-	colorBubble      = ui.RGB(56, 200, 230)
-	colorBubbleGlow  = ui.RGBA(180, 240, 255, 0.40)
-	colorFood        = ui.RGB(255, 176, 28)
-	colorFoodEdge    = ui.RGB(230, 110, 16)
-	colorPlant       = ui.RGB(46, 230, 118)
-	colorPlantGlow   = ui.RGBA(160, 255, 200, 0.40)
-	colorChomp       = ui.RGB(255, 214, 70)
-	colorChompEdge   = ui.RGB(40, 50, 40)
-	colorHandle      = ui.RGB(248, 255, 252)
-	colorHandleMute  = ui.RGB(70, 130, 124)
-	colorFeedHint    = ui.RGBA(90, 150, 148, 0.45)
-	colorFeedHintHot = ui.RGBA(70, 140, 138, 0.70)
-	colorFeedLine    = ui.RGBA(190, 220, 228, 0.40)
-	colorFeedLineHot = ui.RGBA(210, 234, 240, 0.62)
-	colorFeedChip    = ui.RGBA(164, 222, 214, 0.82)
-	colorFeedChipHot = ui.RGBA(164, 222, 214, 0.95)
-	colorResizeHint  = ui.RGBA(210, 245, 255, 0.75)
+	colorStand        = ui.RGB(164, 222, 214)
+	colorStandDark    = ui.RGB(132, 196, 188)
+	colorStandLight   = ui.RGB(190, 236, 230)
+	colorStandShadow  = ui.RGBA(70, 120, 116, 0.22)
+	colorFish         = ui.RGB(28, 196, 220)
+	colorFishGlow     = ui.RGBA(170, 240, 255, 0.45)
+	colorFishAlt      = ui.RGB(36, 210, 180)
+	colorFishAltGlow  = ui.RGBA(170, 255, 230, 0.45)
+	colorFishWarm     = ui.RGB(40, 180, 230)
+	colorFishWarmGlow = ui.RGBA(180, 230, 255, 0.45)
+	colorBubble       = ui.RGB(56, 200, 230)
+	colorBubbleGlow   = ui.RGBA(180, 240, 255, 0.40)
+	colorFood         = ui.RGB(255, 176, 28)
+	colorFoodEdge     = ui.RGB(230, 110, 16)
+	colorPlant        = ui.RGB(46, 230, 118)
+	colorPlantGlow    = ui.RGBA(160, 255, 200, 0.40)
+	colorChomp        = ui.RGB(255, 214, 70)
+	colorChompEdge    = ui.RGB(40, 50, 40)
+	colorHandle       = ui.RGB(248, 255, 252)
+	colorHandleMute   = ui.RGB(70, 130, 124)
+	colorFeedHint     = ui.RGBA(90, 150, 148, 0.45)
+	colorFeedHintHot  = ui.RGBA(70, 140, 138, 0.70)
+	colorFeedLine     = ui.RGBA(190, 220, 228, 0.40)
+	colorFeedLineHot  = ui.RGBA(210, 234, 240, 0.62)
+	colorFeedChip     = ui.RGBA(164, 222, 214, 0.82)
+	colorFeedChipHot  = ui.RGBA(164, 222, 214, 0.95)
+	colorResizeHint   = ui.RGBA(210, 245, 255, 0.75)
 )
 
 const (
@@ -135,6 +139,17 @@ func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool, g GlassStyle, scal
 	hi.LineTo(gx+s(2.5), gy+s(2.5))
 	hi.LineTo(gx+gw-s(4), gy+s(2.5))
 	p.StrokePath(hi.Cap(ui.ButtCap), sw(1.35), g.Hi)
+}
+
+func fishColors(tint int) (fill, glow ui.Color) {
+	switch tint % 3 {
+	case 1:
+		return colorFishAlt, colorFishAltGlow
+	case 2:
+		return colorFishWarm, colorFishWarmGlow
+	default:
+		return colorFish, colorFishGlow
+	}
 }
 
 func withAlpha(c ui.Color, a float64) ui.Color {

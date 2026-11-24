@@ -42,13 +42,25 @@ var biteWords = []string{"chomp", "crunch", "gulp"}
 
 // Fish is one swimmer on the plate.
 type Fish struct {
-	ID       int
-	X, Y     float64
-	VX, VY   float64
-	Facing   float64 // +1 right, -1 left
-	TargetX  float64
-	TargetY  float64
-	Retarget float64
+	ID                     int
+	X, Y                   float64
+	VX, VY                 float64
+	Facing                 float64 // +1 right, -1 left
+	TargetX                float64
+	TargetY                float64
+	Retarget               float64
+	Size                   float64 // body scale; 1 is the historical 108×28 adult
+	Swell                  float64 // visual pulse only, 1 when idle
+	MatureAge              float64
+	State                  LifeState
+	AnimT                  float64
+	Emerging               bool
+	ParentID               int
+	SlideFromX, SlideFromY float64
+	SlideToX, SlideToY     float64
+	SpeedVar               float64
+	Tint                   int
+	lotteryCD              float64
 }
 
 // Food falls after a click on the strip above the plate.
@@ -165,10 +177,14 @@ func New(w, h float64, seed int64) *Tank {
 		x, y := t.Panel.RandomPoint(s[0], s[1], 8)
 		x, y = t.Panel.ClampInside(x-fishW/2, y-fishH/2, fishW, fishH)
 		t.Fishes = append(t.Fishes, Fish{
-			ID:     t.nextID,
-			X:      x,
-			Y:      y,
-			Facing: s[2],
+			ID:       t.nextID,
+			X:        x,
+			Y:        y,
+			Facing:   s[2],
+			Size:     StartSize,
+			Swell:    1,
+			SpeedVar: 1,
+			Tint:     (t.nextID - 1) % 3,
 		})
 		t.pickWanderTarget(len(t.Fishes) - 1)
 	}
@@ -247,6 +263,7 @@ func (t *Tank) Step(dt float64) {
 	t.separateFish(hunters)
 	t.stepBubbles(dt)
 	t.stepChomps(dt)
+	t.stepLife(dt)
 
 	if t.rng.Float64() < dt*1.3 && len(t.Bubbles) < 12 {
 		t.spawnBubble(false)
@@ -255,20 +272,23 @@ func (t *Tank) Step(dt float64) {
 
 func (t *Tank) stepFish(i int, dt float64, foodIdx int) {
 	f := &t.Fishes[i]
-	chasing := foodIdx >= 0 && foodIdx < len(t.Foods)
-	speed := wanderSpeed
+	if f.busy() || f.Emerging {
+		return
+	}
+	chasing := foodIdx >= 0 && foodIdx < len(t.Foods) && f.CanEat()
+	speed := wanderSpeed * f.SpeedScale()
 	if chasing {
-		speed = chaseSpeed
+		speed = chaseSpeed * f.SpeedScale()
 		fx, fy := t.Foods[foodIdx].Center()
 		f.TargetX, f.TargetY = fx, fy
-		if fx < f.X+fishW/2-4 {
+		if fx < f.X+f.W()/2-4 {
 			f.Facing = -1
-		} else if fx > f.X+fishW/2+4 {
+		} else if fx > f.X+f.W()/2+4 {
 			f.Facing = 1
 		}
 	} else if t.Hovering && t.nearestHover() == i {
-		speed = hoverSpeed
-		cx, cy := f.X+fishW/2, f.Y+fishH/2
+		speed = hoverSpeed * f.SpeedScale()
+		cx, cy := f.Center()
 		dx, dy := t.HoverX-cx, t.HoverY-cy
 		dist := math.Hypot(dx, dy)
 		if dist > hoverStand {
@@ -285,13 +305,13 @@ func (t *Tank) stepFish(i int, dt float64, foodIdx int) {
 		}
 	}
 	if t.Hovering && !chasing {
-		if t.HoverX < f.X+fishW/2-8 {
+		if t.HoverX < f.X+f.W()/2-8 {
 			f.Facing = -1
-		} else if t.HoverX > f.X+fishW/2+8 {
+		} else if t.HoverX > f.X+f.W()/2+8 {
 			f.Facing = 1
 		}
 	}
-	originX, originY := f.X+fishW/2, f.Y+fishH/2
+	originX, originY := f.Center()
 	if chasing {
 		originX, originY = f.Mouth()
 	}
@@ -327,7 +347,11 @@ func (t *Tank) stepFish(i int, dt float64, foodIdx int) {
 func (t *Tank) nearestHover() int {
 	best, bestD := 0, math.MaxFloat64
 	for i, f := range t.Fishes {
-		d := math.Hypot(f.X+fishW/2-t.HoverX, f.Y+fishH/2-t.HoverY)
+		if !f.Live() || f.Emerging {
+			continue
+		}
+		cx, cy := f.Center()
+		d := math.Hypot(cx-t.HoverX, cy-t.HoverY)
 		if d < bestD {
 			best, bestD = i, d
 		}
@@ -349,6 +373,9 @@ func (t *Tank) assignHunters() []int {
 	}
 	pairs := make([]pair, 0, len(t.Fishes)*len(t.Foods))
 	for i, f := range t.Fishes {
+		if !f.CanEat() {
+			continue
+		}
 		mx, my := f.Mouth()
 		for j, food := range t.Foods {
 			cx, cy := food.Center()
@@ -380,10 +407,13 @@ func (t *Tank) separateFish(hunters []int) {
 		for i := 0; i < len(t.Fishes); i++ {
 			for j := i + 1; j < len(t.Fishes); j++ {
 				a, b := &t.Fishes[i], &t.Fishes[j]
+				if a.Emerging || b.Emerging || a.State == LifeDying || b.State == LifeDying || a.busy() && a.State != LifeSwim || b.busy() && b.State != LifeSwim {
+					continue
+				}
 				aL, aT := a.X-fishGap/2, a.Y-fishGap/2
-				aR, aB := a.X+fishW+fishGap/2, a.Y+fishH+fishGap/2
+				aR, aB := a.X+a.W()+fishGap/2, a.Y+a.H()+fishGap/2
 				bL, bT := b.X-fishGap/2, b.Y-fishGap/2
-				bR, bB := b.X+fishW+fishGap/2, b.Y+fishH+fishGap/2
+				bR, bB := b.X+b.W()+fishGap/2, b.Y+b.H()+fishGap/2
 				ox := math.Min(aR, bR) - math.Max(aL, bL)
 				oy := math.Min(aB, bB) - math.Max(aT, bT)
 				if ox <= 0 || oy <= 0 {
@@ -391,13 +421,13 @@ func (t *Tank) separateFish(hunters []int) {
 				}
 				var dx, dy float64
 				if ox < oy {
-					if a.X+fishW/2 <= b.X+fishW/2 {
+					if a.X+a.W()/2 <= b.X+b.W()/2 {
 						dx = -ox
 					} else {
 						dx = ox
 					}
 				} else {
-					if a.Y+fishH/2 <= b.Y+fishH/2 {
+					if a.Y+a.H()/2 <= b.Y+b.H()/2 {
 						dy = -oy
 					} else {
 						dy = oy
@@ -552,10 +582,11 @@ func (t *Tank) eatFood(i, foodIdx int) {
 	t.Chomps = append(t.Chomps, Chomp{
 		ID:   t.nextID,
 		X:    mx,
-		Y:    my - fishH/2 - 6,
+		Y:    my - f.H()/2 - 6,
 		Text: text,
 		Life: chompLife,
 	})
+	t.growFromEat(i)
 }
 
 func (t *Tank) pickWanderTarget(i int) {
@@ -566,17 +597,18 @@ func (t *Tank) pickWanderTarget(i int) {
 	bestX, bestY, bestScore := 0.0, 0.0, -1.0
 	for n := 0; n < 8; n++ {
 		x, y := t.Panel.RandomPoint(t.rng.Float64(), t.rng.Float64(), 10)
-		fx, fy := t.Panel.ClampInside(x-fishW/2, y-fishH/2, fishW, fishH)
+		fw, fh := f.W(), f.H()
+		fx, fy := t.Panel.ClampInside(x-fw/2, y-fh/2, fw, fh)
 		score := 1e9
 		for j, o := range t.Fishes {
 			if j == i {
 				continue
 			}
-			if fishBoxesOverlap(fx, fy, o.X, o.Y, fishGap) {
+			if boxesOverlap(fx, fy, fw, fh, o.X, o.Y, o.W(), o.H(), fishGap) {
 				score = -1
 				break
 			}
-			d := boxSeparation(fx, fy, o.X, o.Y)
+			d := boxSeparationSized(fx, fy, fw, fh, o.X, o.Y, o.W(), o.H())
 			if d < score {
 				score = d
 			}
@@ -613,39 +645,48 @@ func (t *Tank) clampFish(i int) {
 	if i < 0 || i >= len(t.Fishes) {
 		return
 	}
-	t.Fishes[i].X, t.Fishes[i].Y = t.Panel.ClampInside(t.Fishes[i].X, t.Fishes[i].Y, fishW, fishH)
+	w, h := t.Fishes[i].W(), t.Fishes[i].H()
+	t.Fishes[i].X, t.Fishes[i].Y = t.Panel.ClampInside(t.Fishes[i].X, t.Fishes[i].Y, w, h)
+}
+
+func boxesOverlap(ax, ay, aw, ah, bx, by, bw, bh, gap float64) bool {
+	return ax < bx+bw+gap && bx < ax+aw+gap && ay < by+bh+gap && by < ay+ah+gap
 }
 
 func fishBoxesOverlap(ax, ay, bx, by, gap float64) bool {
-	return ax < bx+fishW+gap && bx < ax+fishW+gap && ay < by+fishH+gap && by < ay+fishH+gap
+	return boxesOverlap(ax, ay, fishW, fishH, bx, by, fishW, fishH, gap)
 }
 
 func boxSeparation(ax, ay, bx, by float64) float64 {
-	ox := math.Min(ax+fishW, bx+fishW) - math.Max(ax, bx)
-	oy := math.Min(ay+fishH, by+fishH) - math.Max(ay, by)
+	return boxSeparationSized(ax, ay, fishW, fishH, bx, by, fishW, fishH)
+}
+
+func boxSeparationSized(ax, ay, aw, ah, bx, by, bw, bh float64) float64 {
+	ox := math.Min(ax+aw, bx+bw) - math.Max(ax, bx)
+	oy := math.Min(ay+ah, by+bh) - math.Max(ay, by)
 	if ox > 0 && oy > 0 {
 		return -math.Min(ox, oy)
 	}
 	dx, dy := 0.0, 0.0
 	if ox <= 0 {
-		if ax+fishW < bx {
-			dx = bx - (ax + fishW)
+		if ax+aw < bx {
+			dx = bx - (ax + aw)
 		} else {
-			dx = ax - (bx + fishW)
+			dx = ax - (bx + bw)
 		}
 	}
 	if oy <= 0 {
-		if ay+fishH < by {
-			dy = by - (ay + fishH)
+		if ay+ah < by {
+			dy = by - (ay + ah)
 		} else {
-			dy = ay - (by + fishH)
+			dy = ay - (by + bh)
 		}
 	}
 	return math.Hypot(dx, dy)
 }
 
 func fishesOverlap(a, b Fish, eps float64) bool {
-	return a.X < b.X+fishW-eps && b.X < a.X+fishW-eps && a.Y < b.Y+fishH-eps && b.Y < a.Y+fishH-eps
+	return a.X < b.X+b.W()-eps && b.X < a.X+a.W()-eps && a.Y < b.Y+b.H()-eps && b.Y < a.Y+a.H()-eps
 }
 
 // Sprite returns the facing-appropriate characters for fish i.
@@ -656,23 +697,15 @@ func (t *Tank) Sprite(i int) string {
 	return t.Fishes[i].Sprite()
 }
 
-// Sprite returns the facing-appropriate characters for this fish.
-func (f Fish) Sprite() string {
-	if f.Facing < 0 {
-		return SpriteLeft
-	}
-	return SpriteRight
-}
-
 // Mouth is the bite point on the leading glyph, not the body center.
 // Eating from the body center left edge food more than eatRadius
 // from a clamped 108-wide fish (the corner-pile bug).
 func (f Fish) Mouth() (x, y float64) {
-	y = f.Y + fishH/2
+	y = f.Y + f.H()/2
 	if f.Facing < 0 {
 		return f.X, y
 	}
-	return f.X + fishW, y
+	return f.X + f.W(), y
 }
 
 // Center is the middle of the food glyph's drawing box.

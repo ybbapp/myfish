@@ -159,7 +159,14 @@ func (a *app) view(c *ui.Context) {
 		glowText(c, f.Glyph, fmt.Sprintf("food-%d", f.ID), foodFontSize, withAlpha(colorFood, fade), withAlpha(colorFoodEdge, fade), f.X, f.Y, scale)
 	}
 	for _, fish := range a.tank.Fishes {
-		glowText(c, fish.Sprite(), fmt.Sprintf("fish-%d", fish.ID), fishFontSize, colorFish, colorFishGlow, fish.X, fish.Y, scale)
+		sprite := fish.Sprite()
+		if sprite == "" {
+			continue
+		}
+		fill, glow := fishColors(fish.Tint)
+		alpha := fish.Opacity()
+		size := float32(float64(fishFontSize) * fish.VisualScale())
+		glowText(c, sprite, fmt.Sprintf("fish-%d", fish.ID), size, withAlpha(fill, alpha), withAlpha(glow, alpha), fish.X, fish.Y, scale)
 	}
 	for _, ch := range a.tank.Chomps {
 		fade := 1 - ch.Age/ch.Life

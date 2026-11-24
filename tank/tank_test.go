@@ -374,10 +374,15 @@ func assertNoBoxOverlap(t *testing.T, tk *Tank, step int) {
 	t.Helper()
 	for i := 0; i < len(tk.Fishes); i++ {
 		for j := i + 1; j < len(tk.Fishes); j++ {
-			if fishesOverlap(tk.Fishes[i], tk.Fishes[j], 0.5) {
-				a, b := tk.Fishes[i], tk.Fishes[j]
+			a, b := tk.Fishes[i], tk.Fishes[j]
+			// A newborn is spawned inside the adult and slides out; that
+			// overlap is the birth animation, not a swim collision.
+			if a.Emerging || b.Emerging || a.State == LifeDying || b.State == LifeDying {
+				continue
+			}
+			if fishesOverlap(a, b, 0.5) {
 				t.Fatalf("step %d: fish %d (%.1f,%.1f %gx%g) overlaps fish %d (%.1f,%.1f)",
-					step, i, a.X, a.Y, fishW, fishH, j, b.X, b.Y)
+					step, i, a.X, a.Y, a.W(), a.H(), j, b.X, b.Y)
 			}
 		}
 	}
