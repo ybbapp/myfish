@@ -21,6 +21,8 @@ const (
 	hoverSpeed  = 26.0
 	hoverStand  = 56.0
 	chompLife   = 1.35
+	foodLife    = 16.0
+	foodFade    = 2.0
 	fishW       = 108.0
 	fishH       = 28.0
 	fishGap     = 10.0
@@ -50,10 +52,14 @@ type Fish struct {
 }
 
 // Food falls after a click on the strip above the plate.
+// Uneaten pellets fade after FoodLife seconds; this is a per-pellet
+// timeout, not a global wipe of the bowl.
 type Food struct {
 	ID    int
 	X, Y  float64
 	Glyph string
+	Age   float64
+	Life  float64
 }
 
 // Bubble drifts upward.
@@ -122,6 +128,8 @@ func New(w, h float64, seed int64) *Tank {
 		t.pickWanderTarget(len(t.Fishes) - 1)
 	}
 	p := t.Panel
+	// Plants are visual decoration only: not a collision body, not a
+	// swim floor, and they do not block eating.
 	t.Plants = []Plant{
 		{X: p.IX + p.IW*0.18, Y: p.PlantY - 4, Text: PlantLeft},
 		{X: p.IX + p.IW*0.72, Y: p.PlantY - 4, Text: PlantRight},
@@ -163,12 +171,20 @@ func (t *Tank) Step(dt float64) {
 	}
 	t.Time += dt
 
+	floor := t.Panel.FloorY() - 8
 	alive := t.Foods[:0]
 	for _, f := range t.Foods {
+		f.Age += dt
+		if f.Life <= 0 {
+			f.Life = foodLife
+		}
+		if f.Age >= f.Life {
+			continue
+		}
 		f.Y += foodFall * dt
 		f.X, f.Y = t.Panel.ClampInside(f.X, f.Y, 8, 8)
-		if f.Y >= t.Panel.PlantY-6 {
-			f.Y = t.Panel.PlantY - 6
+		if f.Y >= floor {
+			f.Y = floor
 		}
 		alive = append(alive, f)
 	}
@@ -194,7 +210,13 @@ func (t *Tank) stepFish(i int, dt float64, foodIdx int) {
 	speed := wanderSpeed
 	if chasing {
 		speed = chaseSpeed
-		f.TargetX, f.TargetY = t.Foods[foodIdx].X, t.Foods[foodIdx].Y
+		fx, fy := t.Foods[foodIdx].Center()
+		f.TargetX, f.TargetY = fx, fy
+		if fx < f.X+fishW/2-4 {
+			f.Facing = -1
+		} else if fx > f.X+fishW/2+4 {
+			f.Facing = 1
+		}
 	} else if t.Hovering && t.nearestHover() == i {
 		speed = hoverSpeed
 		cx, cy := f.X+fishW/2, f.Y+fishH/2
@@ -220,8 +242,12 @@ func (t *Tank) stepFish(i int, dt float64, foodIdx int) {
 			f.Facing = 1
 		}
 	}
-	dx := f.TargetX - (f.X + fishW/2)
-	dy := f.TargetY - (f.Y + fishH/2)
+	originX, originY := f.X+fishW/2, f.Y+fishH/2
+	if chasing {
+		originX, originY = f.Mouth()
+	}
+	dx := f.TargetX - originX
+	dy := f.TargetY - originY
 	dist := math.Hypot(dx, dy)
 	if dist > 1 {
 		f.VX = dx / dist * speed
@@ -231,7 +257,7 @@ func (t *Tank) stepFish(i int, dt float64, foodIdx int) {
 	} else {
 		f.VX, f.VY = 0, 0
 	}
-	if math.Abs(f.VX) > 6 && !t.Hovering {
+	if math.Abs(f.VX) > 6 && !t.Hovering && !chasing {
 		if f.VX > 0 {
 			f.Facing = 1
 		} else {
@@ -241,10 +267,9 @@ func (t *Tank) stepFish(i int, dt float64, foodIdx int) {
 	t.clampFish(i)
 
 	if chasing {
-		mouthX := f.X + fishW/2
-		mouthY := f.Y + fishH/2
-		food := t.Foods[foodIdx]
-		if math.Hypot(food.X-mouthX, food.Y-mouthY) < eatRadius {
+		mx, my := f.Mouth()
+		cx, cy := t.Foods[foodIdx].Center()
+		if math.Hypot(cx-mx, cy-my) < eatRadius {
 			t.eatFood(i, foodIdx)
 		}
 	}
@@ -275,9 +300,10 @@ func (t *Tank) assignHunters() []int {
 	}
 	pairs := make([]pair, 0, len(t.Fishes)*len(t.Foods))
 	for i, f := range t.Fishes {
-		cx, cy := f.X+fishW/2, f.Y+fishH/2
+		mx, my := f.Mouth()
 		for j, food := range t.Foods {
-			pairs = append(pairs, pair{i, j, math.Hypot(food.X-cx, food.Y-cy)})
+			cx, cy := food.Center()
+			pairs = append(pairs, pair{i, j, math.Hypot(cx-mx, cy-my)})
 		}
 	}
 	sort.Slice(pairs, func(a, b int) bool { return pairs[a].d < pairs[b].d })
@@ -407,12 +433,32 @@ func (t *Tank) PlaceFood(x, y float64) bool {
 
 func (t *Tank) placeFood(x, y float64) bool {
 	x, y = t.Panel.ClampInside(x, y, 8, 8)
+	// A long press on one X would otherwise stack every pellet on the
+	// same pixel. Nudge later drops toward the middle of the plate.
+	mid := t.Panel.IX + t.Panel.IW/2
+	for range 6 {
+		stacked := false
+		for _, f := range t.Foods {
+			if math.Abs(f.X-x) < 7 && math.Abs(f.Y-y) < 16 {
+				stacked = true
+				break
+			}
+		}
+		if !stacked {
+			break
+		}
+		dir := 1.0
+		if x > mid {
+			dir = -1
+		}
+		x, y = t.Panel.ClampInside(x+dir*10, y, 8, 8)
+	}
 	t.nextID++
 	glyph := FoodGlyph
 	if t.rng.Intn(3) == 0 {
 		glyph = FoodStar
 	}
-	t.Foods = append(t.Foods, Food{ID: t.nextID, X: x, Y: y, Glyph: glyph})
+	t.Foods = append(t.Foods, Food{ID: t.nextID, X: x, Y: y, Glyph: glyph, Life: foodLife})
 	return true
 }
 
@@ -442,15 +488,12 @@ func (t *Tank) eatFood(i, foodIdx int) {
 	t.Foods = append(t.Foods[:foodIdx], t.Foods[foodIdx+1:]...)
 	t.bites++
 	text := biteWords[(t.bites-1)%len(biteWords)]
-	mouthX := f.X + fishW
-	if f.Facing < 0 {
-		mouthX = f.X
-	}
+	mx, my := f.Mouth()
 	t.nextID++
 	t.Chomps = append(t.Chomps, Chomp{
 		ID:   t.nextID,
-		X:    mouthX,
-		Y:    f.Y - 6,
+		X:    mx,
+		Y:    my - fishH/2 - 6,
 		Text: text,
 		Life: chompLife,
 	})
@@ -562,11 +605,40 @@ func (f Fish) Sprite() string {
 	return SpriteRight
 }
 
+// Mouth is the bite point on the leading glyph, not the body center.
+// Eating from the body center left edge food more than eatRadius
+// from a clamped 108-wide fish (the corner-pile bug).
+func (f Fish) Mouth() (x, y float64) {
+	y = f.Y + fishH/2
+	if f.Facing < 0 {
+		return f.X, y
+	}
+	return f.X + fishW, y
+}
+
+// Center is the middle of the food glyph's drawing box.
+func (f Food) Center() (x, y float64) { return f.X + 4, f.Y + 4 }
+
+// Fade is 1 until the last foodFade seconds of Life, then eases to 0.
+func (f Food) Fade() float64 {
+	left := f.Life - f.Age
+	if left >= foodFade {
+		return 1
+	}
+	if left <= 0 {
+		return 0
+	}
+	return left / foodFade
+}
+
 // FishSize is the drawing box of one fish, in DIPs.
 func FishSize() (w, h float64) { return fishW, fishH }
 
 // ChompLife is how long a bite label stays visible, in seconds.
 func ChompLife() float64 { return chompLife }
+
+// FoodLife is how long an uneaten pellet stays before fading out.
+func FoodLife() float64 { return foodLife }
 
 func clamp(v, lo, hi float64) float64 {
 	if v < lo {

@@ -129,11 +129,16 @@ func (p Panel) FrameBounds() (x, y, w, h float64) {
 	return x, y, right - x, bottom - y
 }
 
-// ClampInside keeps a box of size bw×bh inside the interior.
+// FloorY is the bottom of the interior. Plants are drawn near here
+// as decoration only; they are not a solid floor.
+func (p Panel) FloorY() float64 { return p.IY + p.IH }
+
+// ClampInside keeps a box of size bw×bh inside the interior, including
+// the plant band at the bottom.
 func (p Panel) ClampInside(x, y, bw, bh float64) (float64, float64) {
 	loX, loY := p.IX, p.IY
 	hiX := math.Max(p.IX, p.IX+p.IW-bw)
-	hiY := math.Max(p.IY, p.PlantY-bh)
+	hiY := math.Max(p.IY, p.FloorY()-bh)
 	if hiX < loX {
 		hiX = loX
 	}
@@ -143,9 +148,9 @@ func (p Panel) ClampInside(x, y, bw, bh float64) (float64, float64) {
 	return clamp(x, loX, hiX), clamp(y, loY, hiY)
 }
 
-// RandomPoint returns a point inside the interior, above the plants.
+// RandomPoint returns a point inside the interior, including the plant band.
 func (p Panel) RandomPoint(u, v, pad float64) (x, y float64) {
 	w := math.Max(1, p.IW-2*pad)
-	h := math.Max(1, p.PlantY-p.IY-2*pad)
+	h := math.Max(1, p.FloorY()-p.IY-2*pad)
 	return p.IX + pad + u*w, p.IY + pad + v*h
 }

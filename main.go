@@ -134,7 +134,8 @@ func (a *app) view(c *ui.Context) {
 		glowText(c, b.Glyph, fmt.Sprintf("bubble-%d", b.ID), bubbleFontSize, colorBubble, colorBubbleGlow, b.X, b.Y)
 	}
 	for _, f := range a.tank.Foods {
-		glowText(c, f.Glyph, fmt.Sprintf("food-%d", f.ID), foodFontSize, colorFood, colorFoodEdge, f.X, f.Y)
+		fade := f.Fade()
+		glowText(c, f.Glyph, fmt.Sprintf("food-%d", f.ID), foodFontSize, withAlpha(colorFood, fade), withAlpha(colorFoodEdge, fade), f.X, f.Y)
 	}
 	for _, fish := range a.tank.Fishes {
 		glowText(c, fish.Sprite(), fmt.Sprintf("fish-%d", fish.ID), fishFontSize, colorFish, colorFishGlow, fish.X, fish.Y)

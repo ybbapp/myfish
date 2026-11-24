@@ -110,6 +110,18 @@ func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool, g GlassStyle) {
 	p.StrokePath(hi.Cap(ui.ButtCap), 1.35, g.Hi)
 }
 
+func withAlpha(c ui.Color, a float64) ui.Color {
+	if a >= 1 {
+		return c
+	}
+	if a <= 0 {
+		c.A = 0
+		return c
+	}
+	c.A = uint8(float64(c.A)*a + 0.5)
+	return c
+}
+
 func glowText(c *ui.Context, s, key string, size float32, fill, glow ui.Color, x, y float64) {
 	ui.Text(c, s).Key(key).
 		Font("monospace").FontSize(size).Bold().
