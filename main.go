@@ -180,29 +180,46 @@ func (a *app) view(c *ui.Context) {
 	if feedHot {
 		hint = colorFeedHintHot
 	}
+	feedHit := feedHitRect(pan, scale)
 	feed := ui.Box(c).Key("feed-hit").
-		Absolute().Left(float32(dipX(pan.FX, scale))).Top(float32(dipY(pan.FY, scale))).
-		Size(float32(pan.FW*scale), float32(pan.FH*scale)).
+		Absolute().Left(float32(feedHit.X)).Top(float32(feedHit.Y)).
+		Size(float32(feedHit.W), float32(feedHit.H)).
 		Cursor(ui.CursorPointer).
 		HitTest(func(x, y float32, r ui.Rect) bool {
 			// HitTest x,y are in the same space as r (window DIPs), not
-			// 0-based local coordinates.
+			// 0-based local coordinates. The expanded FEED box already
+			// starts below the top resize band.
 			return hitResizeEdge(float64(x), float64(y), fx, fy, fw, fh, scale, setRect) == resizeNone
 		}).
 		HandleInput(func(ev ui.InputEvent) bool {
 			if a.clickThrough {
 				return false
 			}
-			// InputEvent X/Y are local to this (already scaled) box.
-			x := pan.FX + float64(ev.X)/scale
-			y := pan.FY + float64(ev.Y)/scale
-			in := pan.ContainsFeed(x, y)
+			// InputEvent X/Y are local to this (possibly expanded) box.
+			// Map to design space and clamp into the visual strip so
+			// feeding still uses a top-of-tank coordinate.
+			wx := float64(ev.X) + feedHit.X
+			wy := float64(ev.Y) + feedHit.Y
+			x, y := windowToDesign(wx, wy, scale)
+			if x < pan.FX {
+				x = pan.FX
+			}
+			if x > pan.FX+pan.FW {
+				x = pan.FX + pan.FW
+			}
+			if y < pan.FY {
+				y = pan.FY
+			}
+			if y > pan.FY+pan.FH {
+				y = pan.FY + pan.FH
+			}
+			in := true
 			switch ev.Kind {
 			case ui.InputPointerDown:
 				if ev.Button != 0 {
 					return false
 				}
-				a.pressX, a.pressY = ev.X+float32(dipX(pan.FX, scale)), ev.Y+float32(dipY(pan.FY, scale))
+				a.pressX, a.pressY = float32(wx), float32(wy)
 				a.feeder.Down(now, x, y)
 				return true
 			case ui.InputPointerMove:
@@ -225,7 +242,7 @@ func (a *app) view(c *ui.Context) {
 		}
 	}
 	ui.Text(c, feedLabel).Key("feed-hint").
-		Font("monospace").FontSize(scaledFontSize(11, scale)).Bold().
+		Font("monospace").FontSize(controlFontSize(11, scale)).Bold().
 		TextColor(hint).
 		Absolute().Left(float32(dipX(pan.FX+pan.FW/2-16, scale))).Top(float32(dipY(pan.FY+pan.FH*0.28, scale)))
 
@@ -238,7 +255,8 @@ func (a *app) view(c *ui.Context) {
 		Cursor(ui.CursorMove).
 		HitTest(func(x, y float32, r ui.Rect) bool {
 			// Leave the SET control a click target of its own.
-			if x >= r.W-float32(40*scale) && y <= float32(24*scale) {
+			// HitTest x,y are window DIPs (same space as r.X/r.Y).
+			if setRect.contains(float64(x), float64(y)) {
 				return false
 			}
 			// Edge/corner bands are the resize handles, not a move drag.
@@ -252,7 +270,7 @@ func (a *app) view(c *ui.Context) {
 		a.showGlassMenu()
 	}
 	ui.Text(c, dragLabel).Key("drag-label").
-		Font("monospace").FontSize(scaledFontSize(handleFontSize, scale)).Bold().
+		Font("monospace").FontSize(controlFontSize(handleFontSize, scale)).Bold().
 		TextColor(colorHandleMute).
 		Absolute().Left(float32(dipX(pan.BX+pan.BW/2-18, scale))).Top(float32(dipY(pan.BY+pan.BH*0.35, scale)))
 
@@ -280,9 +298,9 @@ func (a *app) view(c *ui.Context) {
 		Cursor(ui.CursorPointer).
 		HitTest(func(x, y float32, r ui.Rect) bool { return true })
 	setLabelEl := ui.Text(c, setLabel).Key("set-label").
-		Font("monospace").FontSize(scaledFontSize(handleFontSize, scale)).Bold().
+		Font("monospace").FontSize(controlFontSize(handleFontSize, scale)).Bold().
 		TextColor(colorHandleMute).
-		Absolute().Left(float32(setX + 4*scale)).Top(float32(setY + 1*scale))
+		Absolute().Left(float32(setX + max(4*scale, 4))).Top(float32(setY + max(1*scale, 2)))
 	if set.Clicked() || setLabelEl.Clicked() {
 		a.openSettings()
 	}
@@ -316,19 +334,34 @@ func (a *app) onDragInput(ev ui.InputEvent) bool {
 
 func (a *app) setButtonRect(scale float64) rectWH {
 	pan := a.tank.Panel
-	setW, setH := 36*scale, 18*scale
-	if setW < 32 {
-		setW = 32
+	s := clampScale(scale)
+	setW, setH := 36*s, 18*s
+	if setW < minSetW {
+		setW = minSetW
 	}
-	if setH < 16 {
-		setH = 16
+	if setH < minSetH {
+		setH = minSetH
 	}
-	return rectWH{
-		X: dipX(pan.BX+pan.BW, scale) - setW,
-		Y: dipY(pan.BY, scale) + 6*scale,
+	r := rectWH{
+		X: dipX(pan.BX+pan.BW, s) - setW,
+		Y: dipY(pan.BY, s) + 6*s,
 		W: setW,
 		H: setH,
 	}
+	ww, wh := WindowSize(s)
+	if r.X < 0 {
+		r.X = 0
+	}
+	if r.Y < 0 {
+		r.Y = 0
+	}
+	if r.X+r.W > float64(ww) {
+		r.X = float64(ww) - r.W
+	}
+	if r.Y+r.H > float64(wh) {
+		r.Y = float64(wh) - r.H
+	}
+	return r
 }
 
 func cursorForResize(edge resizeEdge) ui.Cursor {

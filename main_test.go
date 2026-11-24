@@ -274,7 +274,7 @@ func TestSettingsReportedAdjustmentSequenceHeadless(t *testing.T) {
 }
 
 func TestViewFeedHoverAndStandAtOtherScales(t *testing.T) {
-	for _, scale := range []float64{minScale, 1, maxScale} {
+	for _, scale := range []float64{minScale, 0.55, 1, maxScale} {
 		a := newApp()
 		a.settings.Scale = scale
 		a.settings.Clamp()

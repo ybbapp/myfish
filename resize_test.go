@@ -58,7 +58,7 @@ func TestHitResizeLeavesFeedAndStandInteriors(t *testing.T) {
 	pan := newApp().tank.Panel
 	fx, fy, fw, fh := pan.FrameBounds()
 	none := rectWH{}
-	for _, scale := range []float64{minScale, defaultScale, maxScale} {
+	for _, scale := range []float64{minScale, 0.55, defaultScale, maxScale} {
 		feedWX := dipX(pan.FX+pan.FW/2, scale)
 		feedWY := dipY(pan.FY+pan.FH/2, scale)
 		if got := hitResizeEdge(feedWX, feedWY, fx, fy, fw, fh, scale, none); got != resizeNone {
@@ -166,7 +166,7 @@ func TestProductionSetButtonWinsOverResize(t *testing.T) {
 	a := newApp()
 	pan := a.tank.Panel
 	fx, fy, fw, fh := pan.FrameBounds()
-	for _, scale := range []float64{minScale, defaultScale, maxScale} {
+	for _, scale := range []float64{minScale, 0.55, defaultScale, maxScale} {
 		set := a.setButtonRect(scale)
 		cx, cy := set.X+set.W/2, set.Y+set.H/2
 		if got := hitResizeEdge(cx, cy, fx, fy, fw, fh, scale, set); got != resizeNone {
@@ -178,7 +178,7 @@ func TestProductionSetButtonWinsOverResize(t *testing.T) {
 func TestFrameEdgeClearsNativeResizeInset(t *testing.T) {
 	pan := newApp().tank.Panel
 	fx, fy, fw, fh := pan.FrameBounds()
-	for _, scale := range []float64{minScale, defaultScale, maxScale} {
+	for _, scale := range []float64{minScale, 0.55, defaultScale, maxScale} {
 		x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
 		ww, wh := WindowSize(scale)
 		clearance := float64(nativeResizeInset + 1)
@@ -186,5 +186,55 @@ func TestFrameEdgeClearsNativeResizeInset(t *testing.T) {
 			t.Fatalf("scale %.2f: frame (%.1f,%.1f %.1fx%.1f) is inside the %dpx native inset of window %dx%d",
 				scale, x, y, w, h, nativeResizeInset, ww, wh)
 		}
+	}
+}
+
+func TestMinScaleKeepsFeedSetAndEdgesUsable(t *testing.T) {
+	a := newApp()
+	pan := a.tank.Panel
+	fx, fy, fw, fh := pan.FrameBounds()
+	scale := minScale
+	feedMidX := dipX(pan.FX+pan.FW/2, scale)
+	feedMidY := dipY(pan.FY+pan.FH/2, scale)
+	if got := hitResizeEdge(feedMidX, feedMidY, fx, fy, fw, fh, scale, rectWH{}); got != resizeNone {
+		t.Fatalf("FEED mid at 35%% is %s, want none", got)
+	}
+	hit := feedHitRect(pan, scale)
+	if hit.H < minFeedHitH {
+		t.Fatalf("FEED hit height %.1f, want at least %.0f", hit.H, minFeedHitH)
+	}
+	if !hit.contains(feedMidX, feedMidY) {
+		t.Fatalf("FEED hit %+v does not contain mid %.1f,%.1f", hit, feedMidX, feedMidY)
+	}
+	x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
+	inward := resizeInwardHit(scale)
+	if hit.Y < y+inward-0.01 {
+		t.Fatalf("FEED hit top %.1f overlaps the inward resize band ending at %.1f", hit.Y, y+inward)
+	}
+	if got := hitResizeEdge(x+w/2, y, fx, fy, fw, fh, scale, rectWH{}); got != resizeN {
+		t.Fatalf("top edge mid at 35%% is %s, want n", got)
+	}
+	outward, _, _ := resizeHandlePads(fx, fy, fw, fh, scale)
+	if got := hitResizeEdge(x+w/2, y-outward+0.5, fx, fy, fw, fh, scale, rectWH{}); got != resizeN {
+		t.Fatalf("outward top pad at 35%% is %s, want n", got)
+	}
+	if y-outward < float64(nativeResizeInset) {
+		t.Fatalf("outward top handle at %.1f enters the %d DIP native inset", y-outward, nativeResizeInset)
+	}
+	set := a.setButtonRect(scale)
+	if set.W < minSetW || set.H < minSetH {
+		t.Fatalf("SET hit %.1fx%.1f, want at least %.0fx%.0f", set.W, set.H, minSetW, minSetH)
+	}
+	if got := hitResizeEdge(set.X+set.W/2, set.Y+set.H/2, fx, fy, fw, fh, scale, set); got != resizeNone {
+		t.Fatalf("SET mid at 35%% is %s, want none", got)
+	}
+	standMidX := dipX(pan.BX+pan.BW/2, scale)
+	standMidY := dipY(pan.BY+(pan.BH+pan.LegH)/2, scale)
+	if got := hitResizeEdge(standMidX, standMidY, fx, fy, fw, fh, scale, set); got != resizeNone {
+		t.Fatalf("stand mid at 35%% is %s, want none", got)
+	}
+	// A side edge mid, away from SET, remains a resize handle.
+	if got := hitResizeEdge(x, y+h/2, fx, fy, fw, fh, scale, set); got != resizeW {
+		t.Fatalf("free W edge at 35%% is %s, want w", got)
 	}
 }

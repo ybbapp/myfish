@@ -1,6 +1,10 @@
 package main
 
-import "math"
+import (
+	"math"
+
+	"mygo-desktop-fish/tank"
+)
 
 // Custom (not native OS) edge-resize of the frameless tank. The window
 // keeps DisableResize so the WM will not stretch width and height
@@ -21,16 +25,27 @@ const (
 	resizeSW
 )
 
-// Window-space hit sizes, not design-space lengths: they stay easy to
-// hit at the smallest tank. 8 DIP is thinner than half the FEED strip
-// at 55%, so the middle of FEED still feeds.
+// Window-space hit sizes, not design-space lengths. The 8 DIP edge
+// band is the preferred outward/inward depth, and corners stay 16 DIP
+// wide along the edge so they are easy to find. At 35% the FEED strip
+// is only about 13 DIP tall, so inward depth is shrunk just enough to
+// leave the FEED mid and stand mid free; the 16 DIP transparent pad
+// still gives a comfortable outward grab. Corners use the same inward
+// depth so they cannot swallow FEED or SET.
 const (
 	resizeEdgeHit   = 8.0
 	resizeCornerHit = 16.0
+	minFeedHitH     = 24.0
+	minSetW         = 36.0
+	minSetH         = 22.0
 )
 
 type rectWH struct {
 	X, Y, W, H float64
+}
+
+func (r rectWH) contains(wx, wy float64) bool {
+	return r.W > 0 && r.H > 0 && wx >= r.X && wx <= r.X+r.W && wy >= r.Y && wy <= r.Y+r.H
 }
 
 func (e resizeEdge) String() string {
@@ -74,32 +89,95 @@ func windowFrame(fx, fy, fw, fh, scale float64) (x, y, w, h float64) {
 	return dipX(fx, s), dipY(fy, s), fw * s, fh * s
 }
 
+func clampNonNeg(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+// resizeInwardHit is how far the handle reaches into the visible
+// chassis. It never covers the FEED mid or the stand mid.
+func resizeInwardHit(scale float64) float64 {
+	s := clampScale(scale)
+	pan := tank.Layout(designW, designH)
+	fx, fy, fw, fh := pan.FrameBounds()
+	_, y, _, h := windowFrame(fx, fy, fw, fh, s)
+	feedMid := dipY(pan.FY+pan.FH/2, s)
+	standMid := dipY(pan.BY+(pan.BH+pan.LegH)/2, s)
+	topClear := feedMid - y - 2
+	botClear := y + h - standMid - 2
+	inward := math.Min(resizeEdgeHit, math.Min(topClear, botClear))
+	if inward < 3 {
+		return 3
+	}
+	return inward
+}
+
+// resizeHandlePads returns the outward depth (kept outside the native
+// 5 DIP frameless inset), the inward depth (FEED/stand mid stay free),
+// and how far a corner extends along the edge.
+func resizeHandlePads(fx, fy, fw, fh, scale float64) (outward, inward, cornerAlong float64) {
+	s := clampScale(scale)
+	x, y, w, h := windowFrame(fx, fy, fw, fh, s)
+	ww, wh := WindowSize(s)
+	inset := float64(nativeResizeInset)
+	outward = resizeEdgeHit
+	outward = math.Min(outward, clampNonNeg(y-inset))
+	outward = math.Min(outward, clampNonNeg(x-inset))
+	outward = math.Min(outward, clampNonNeg(float64(ww)-inset-(x+w)))
+	outward = math.Min(outward, clampNonNeg(float64(wh)-inset-(y+h)))
+	inward = resizeInwardHit(s)
+	cornerAlong = resizeCornerHit
+	return outward, inward, cornerAlong
+}
+
+// feedHitRect is the window-space click target for FEED. At small
+// scales the visual strip is shorter than a comfortable tap, so the
+// box grows downward (it may slightly overlap the top of the glass)
+// starting just below the top resize band. The tank face itself is not
+// stretched.
+func feedHitRect(pan tank.Panel, scale float64) rectWH {
+	s := clampScale(scale)
+	_, fy, _, _ := pan.FrameBounds()
+	frameTop := dipY(fy, s)
+	inward := resizeInwardHit(s)
+	visX := dipX(pan.FX, s)
+	visW := pan.FW * s
+	visTop := dipY(pan.FY, s)
+	visBot := visTop + pan.FH*s
+	top := math.Max(visTop, frameTop+inward)
+	h := visBot - top
+	if h < minFeedHitH {
+		h = minFeedHitH
+	}
+	return rectWH{X: visX, Y: top, W: visW, H: h}
+}
+
 // hitResizeEdge reports which frame edge or corner (wx, wy) is on, in
 // window DIPs. exclude (typically SET) wins over a resize handle.
 func hitResizeEdge(wx, wy, fx, fy, fw, fh, scale float64, exclude rectWH) resizeEdge {
-	if exclude.W > 0 && exclude.H > 0 {
-		if wx >= exclude.X && wx <= exclude.X+exclude.W && wy >= exclude.Y && wy <= exclude.Y+exclude.H {
-			return resizeNone
-		}
+	if exclude.contains(wx, wy) {
+		return resizeNone
 	}
 	x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
 	if w <= 0 || h <= 0 {
 		return resizeNone
 	}
-	pad := resizeEdgeHit
-	corner := resizeCornerHit
-	if wx < x-pad || wy < y-pad || wx > x+w+pad || wy > y+h+pad {
+	outward, inward, cornerAlong := resizeHandlePads(fx, fy, fw, fh, scale)
+	if wx < x-outward || wy < y-outward || wx > x+w+outward || wy > y+h+outward {
 		return resizeNone
 	}
-	nearW := wx >= x-pad && wx <= x+pad
-	nearE := wx >= x+w-pad && wx <= x+w+pad
-	nearN := wy >= y-pad && wy <= y+pad
-	nearS := wy >= y+h-pad && wy <= y+h+pad
-	// Corners use a larger box so they are easier to find.
-	nearCW := wx >= x-pad && wx <= x+corner
-	nearCE := wx >= x+w-corner && wx <= x+w+pad
-	nearCN := wy >= y-pad && wy <= y+corner
-	nearCS := wy >= y+h-corner && wy <= y+h+pad
+	nearW := wx >= x-outward && wx <= x+inward
+	nearE := wx >= x+w-inward && wx <= x+w+outward
+	nearN := wy >= y-outward && wy <= y+inward
+	nearS := wy >= y+h-inward && wy <= y+h+outward
+	// Corners are wider along the edge, but no deeper than the edge
+	// band, so they cannot cover FEED or the stand mid at 35%.
+	nearCW := wx >= x-outward && wx <= x+cornerAlong
+	nearCE := wx >= x+w-cornerAlong && wx <= x+w+outward
+	nearCN := wy >= y-outward && wy <= y+inward
+	nearCS := wy >= y+h-inward && wy <= y+h+outward
 	switch {
 	case nearCW && nearCN:
 		return resizeNW
@@ -171,7 +249,8 @@ func positionAfterResize(edge resizeEdge, startX, startY, startW, startH, newW, 
 
 func resizeInputBounds(fx, fy, fw, fh, scale float64) (int, int, int, int) {
 	sx, sy, sw, sh := scaleFrameBounds(fx, fy, fw, fh, scale)
-	pad := int(math.Ceil(resizeEdgeHit))
+	outward, _, _ := resizeHandlePads(fx, fy, fw, fh, scale)
+	pad := int(math.Ceil(outward))
 	x, y := sx-pad, sy-pad
 	w, h := sw+2*pad, sh+2*pad
 	ww, wh := WindowSize(scale)

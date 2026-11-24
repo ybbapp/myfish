@@ -6,7 +6,7 @@ const (
 	designW      = 420
 	designH      = 520
 	defaultScale = 0.75
-	minScale     = 0.55
+	minScale     = 0.35
 	maxScale     = 1.25
 	// windowPad is a transparent DIP margin around the tank. MyGo's
 	// Linux backend intercepts the outer 5 page pixels of a
@@ -83,6 +83,18 @@ func scaledFontSize(size, scale float64) float32 {
 		return 1
 	}
 	return float32(s)
+}
+
+// controlFontSize is for FEED/SET labels only. Below the previous 55%
+// minimum the glyphs would shrink to a few DIP; keep a 10 DIP floor so
+// they stay readable without changing the 75% default look or stretching
+// the tank face.
+func controlFontSize(size, scale float64) float32 {
+	s := scaledFontSize(size, scale)
+	if clampScale(scale) < 0.55 && s < 10 {
+		return 10
+	}
+	return s
 }
 
 type workArea struct {

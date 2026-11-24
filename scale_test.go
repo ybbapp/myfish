@@ -51,6 +51,64 @@ func TestScaleClampAndRestore(t *testing.T) {
 	}
 }
 
+func TestMinScaleContentIs35Percent(t *testing.T) {
+	if minScale != 0.35 {
+		t.Fatalf("minScale %v, want 0.35", minScale)
+	}
+	if defaultScale != 0.75 {
+		t.Fatalf("default scale must stay 75%%, got %v", defaultScale)
+	}
+	cw, ch := contentSize(minScale)
+	if cw != 147 || ch != 182 {
+		t.Fatalf("35%% content %dx%d, want 147x182", cw, ch)
+	}
+	w, h := WindowSize(minScale)
+	if w != 179 || h != 214 {
+		t.Fatalf("35%% window %dx%d, want 179x214 (content plus 16 DIP pad)", w, h)
+	}
+}
+
+func TestLegacy55PercentSettingsStay55(t *testing.T) {
+	// A previously saved 55% size (the old minimum) must stay 55%,
+	// not jump to the new 35% floor or back to the 75% default.
+	s := DefaultSettings()
+	s.Scale = 0.55
+	s.Clamp()
+	if s.Scale != 0.55 {
+		t.Fatalf("previously saved 55%% was changed to %v", s.Scale)
+	}
+	s.Scale = 0.40
+	s.Clamp()
+	if math.Abs(s.Scale-0.40) > 1e-9 {
+		t.Fatalf("40%% should now be legal, got %v", s.Scale)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, settingsFileName)
+	saved := Settings{Mode: GlassClear, Opacity: 0, Highlight: 0.7, Scale: 0.55}
+	if err := SaveSettings(path, saved); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(got.Scale-0.55) > 1e-9 {
+		t.Fatalf("reloaded 55%% settings became %v", got.Scale)
+	}
+}
+
+func TestControlFontFloorDoesNotChangeDefault(t *testing.T) {
+	if got := controlFontSize(11, defaultScale); got != scaledFontSize(11, defaultScale) {
+		t.Fatalf("75%% FEED font should stay %v, got %v", scaledFontSize(11, defaultScale), got)
+	}
+	if got := controlFontSize(handleFontSize, defaultScale); got != scaledFontSize(handleFontSize, defaultScale) {
+		t.Fatalf("75%% SET font should stay %v, got %v", scaledFontSize(handleFontSize, defaultScale), got)
+	}
+	if got := controlFontSize(11, minScale); got != 10 {
+		t.Fatalf("35%% FEED font %v, want 10 DIP floor", got)
+	}
+}
+
 func TestScalePersistsAndLegacyJSONGetsDefault(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, settingsFileName)
@@ -80,7 +138,7 @@ func TestScalePersistsAndLegacyJSONGetsDefault(t *testing.T) {
 
 func TestFeedHoverDragAndInputRegionFollowScale(t *testing.T) {
 	pan := tank.Layout(designW, designH)
-	for _, scale := range []float64{defaultScale, minScale, 1, maxScale} {
+	for _, scale := range []float64{defaultScale, minScale, 0.55, 1, maxScale} {
 		// A click in the middle of the FEED strip in window space maps back
 		// to the design-space strip, which is what FeedFromAbove uses.
 		wx, wy := designToWindow(pan.FX+pan.FW*0.7, pan.FY+pan.FH/2, scale)
@@ -131,7 +189,7 @@ func TestSettingsWindowDoesNotFollowTankScale(t *testing.T) {
 		t.Fatal("unexpected")
 	}
 	// The settings window constants must stay fixed as the tank scale changes.
-	for _, scale := range []float64{minScale, defaultScale, maxScale} {
+	for _, scale := range []float64{minScale, 0.55, defaultScale, maxScale} {
 		w, h := WindowSize(scale)
 		if settingsW == w && settingsH == h {
 			t.Fatalf("settings window %dx%d should not equal the tank window at scale %v", settingsW, settingsH, scale)
