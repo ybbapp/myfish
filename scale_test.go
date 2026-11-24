@@ -15,11 +15,15 @@ func TestDefaultScaleIsSmallerThanLegacy(t *testing.T) {
 		t.Fatalf("default scale %v, want %v", s.Scale, defaultScale)
 	}
 	w, h := WindowSize(s.Scale)
-	if w >= designW || h >= designH {
-		t.Fatalf("default window %dx%d is not smaller than the original %dx%d", w, h, designW, designH)
+	cw, ch := contentSize(s.Scale)
+	if cw != 315 || ch != 390 {
+		t.Fatalf("default content %dx%d, want 315x390 (75%% of 420x520)", cw, ch)
 	}
-	if w != 315 || h != 390 {
-		t.Fatalf("default window %dx%d, want 315x390 (75%% of 420x520)", w, h)
+	if w != cw+2*windowPad || h != ch+2*windowPad {
+		t.Fatalf("default window %dx%d, want content plus %d DIP pad", w, h, windowPad)
+	}
+	if w >= designW+2*windowPad || h >= designH+2*windowPad {
+		t.Fatalf("default window %dx%d is not smaller than the original padded size", w, h)
 	}
 }
 

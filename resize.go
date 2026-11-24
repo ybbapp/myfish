@@ -71,7 +71,7 @@ func (e resizeEdge) hasW() bool {
 
 func windowFrame(fx, fy, fw, fh, scale float64) (x, y, w, h float64) {
 	s := clampScale(scale)
-	return fx * s, fy * s, fw * s, fh * s
+	return dipX(fx, s), dipY(fy, s), fw * s, fh * s
 }
 
 // hitResizeEdge reports which frame edge or corner (wx, wy) is on, in
@@ -137,17 +137,18 @@ func scaleFromResizeDrag(edge resizeEdge, startScale float64, startW, startH int
 			best, bestDelta, found = candidate, delta, true
 		}
 	}
+	cw, ch := contentSizeOfWindow(startW, startH)
 	if edge.hasE() {
-		consider((float64(startW) + dx) / designW)
+		consider((float64(cw) + dx) / designW)
 	}
 	if edge.hasW() {
-		consider((float64(startW) - dx) / designW)
+		consider((float64(cw) - dx) / designW)
 	}
 	if edge.hasS() {
-		consider((float64(startH) + dy) / designH)
+		consider((float64(ch) + dy) / designH)
 	}
 	if edge.hasN() {
-		consider((float64(startH) - dy) / designH)
+		consider((float64(ch) - dy) / designH)
 	}
 	if !found {
 		return clampScale(startScale)

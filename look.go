@@ -45,6 +45,7 @@ const (
 
 func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool, g GlassStyle, scale float64) {
 	s := func(v float64) float32 { return float32(v * clampScale(scale)) }
+	ox, oy := float32(windowPad), float32(windowPad)
 	sw := func(v float64) float32 {
 		out := float32(v * clampScale(scale))
 		if out < 0.6 {
@@ -52,9 +53,9 @@ func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool, g GlassStyle, scal
 		}
 		return out
 	}
-	gx, gy, gw, gh, th := s(pan.GX), s(pan.GY), s(pan.GW), s(pan.GH), s(pan.Thickness)
+	gx, gy, gw, gh, th := s(pan.GX)+ox, s(pan.GY)+oy, s(pan.GW), s(pan.GH), s(pan.Thickness)
 
-	bx, by, bw, bh := s(pan.BX), s(pan.BY), s(pan.BW), s(pan.BH)
+	bx, by, bw, bh := s(pan.BX)+ox, s(pan.BY)+oy, s(pan.BW), s(pan.BH)
 	legH, legW := s(pan.LegH), s(pan.LegW)
 	p.Fill(ui.Rect{X: bx + s(8), Y: by + bh + legH - s(3), W: bw - s(16), H: s(6)}, colorStandShadow, sw(5))
 
@@ -64,8 +65,8 @@ func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool, g GlassStyle, scal
 		p.Fill(ui.Rect{X: x + legW - s(4), Y: by + bh, W: s(4), H: legH}, colorStandDark, sw(1))
 		p.Stroke(r, colorStandDark, sw(2), sw(1))
 	}
-	leg(s(pan.Leg1X))
-	leg(s(pan.Leg2X))
+	leg(s(pan.Leg1X) + ox)
+	leg(s(pan.Leg2X) + ox)
 
 	plat := ui.Rect{X: bx, Y: by, W: bw, H: bh}
 	p.Fill(plat, colorStand, sw(4))
@@ -85,7 +86,7 @@ func drawChassis(p *ui.Painter, pan tank.Panel, feedHot bool, g GlassStyle, scal
 	if feedHot {
 		line = colorFeedLineHot
 	}
-	p.Stroke(ui.Rect{X: s(pan.FX) + s(8), Y: s(pan.FY+pan.FH) - s(3), W: s(pan.FW) - s(16), H: s(1)}, line, sw(0.5), sw(1))
+	p.Stroke(ui.Rect{X: s(pan.FX) + ox + s(8), Y: s(pan.FY+pan.FH) + oy - s(3), W: s(pan.FW) - s(16), H: s(1)}, line, sw(0.5), sw(1))
 
 	top := &ui.Path{}
 	top.MoveTo(gx, gy)
@@ -139,7 +140,7 @@ func glowText(c *ui.Context, s, key string, size float32, fill, glow ui.Color, x
 	ui.Text(c, s).Key(key).
 		Font("monospace").FontSize(scaledFontSize(float64(size), scale)).Bold().
 		TextColor(fill).TextStroke(float32(stroke), glow).
-		Absolute().Left(float32(x * clampScale(scale))).Top(float32(y * clampScale(scale)))
+		Absolute().Left(float32(dipX(x, scale))).Top(float32(dipY(y, scale)))
 }
 
 func drawResizeHint(p *ui.Painter, fx, fy, fw, fh, scale float64, edge resizeEdge) {

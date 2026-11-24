@@ -59,14 +59,14 @@ func TestHitResizeLeavesFeedAndStandInteriors(t *testing.T) {
 	fx, fy, fw, fh := pan.FrameBounds()
 	none := rectWH{}
 	for _, scale := range []float64{minScale, defaultScale, maxScale} {
-		feedWX := (pan.FX + pan.FW/2) * scale
-		feedWY := (pan.FY + pan.FH/2) * scale
+		feedWX := dipX(pan.FX+pan.FW/2, scale)
+		feedWY := dipY(pan.FY+pan.FH/2, scale)
 		if got := hitResizeEdge(feedWX, feedWY, fx, fy, fw, fh, scale, none); got != resizeNone {
 			t.Fatalf("FEED mid at scale %.2f is %s, want none (feed mid=%.1f,%.1f frame=%.1f,%.1f %.1fx%.1f)",
 				scale, got, feedWX, feedWY, fx*scale, fy*scale, fw*scale, fh*scale)
 		}
-		standWX := (pan.BX + pan.BW/2) * scale
-		standWY := (pan.BY + (pan.BH+pan.LegH)/2) * scale
+		standWX := dipX(pan.BX+pan.BW/2, scale)
+		standWY := dipY(pan.BY+(pan.BH+pan.LegH)/2, scale)
 		if got := hitResizeEdge(standWX, standWY, fx, fy, fw, fh, scale, none); got != resizeNone {
 			t.Fatalf("stand mid at scale %.2f is %s, want none", scale, got)
 		}
@@ -85,15 +85,16 @@ func TestScaleFromResizeDragClampsAndLocksAspect(t *testing.T) {
 	if got != minScale {
 		t.Fatalf("W shrink past min: got %v want min", got)
 	}
-	// South drag by 20% of height.
-	got = scaleFromResizeDrag(resizeS, start, sw, sh, 0, 0.20*float64(sh))
-	want := clampScale(start + 0.20*float64(sh)/designH)
+	cw, ch := contentSizeOfWindow(sw, sh)
+	// South drag by 20% of the content height.
+	got = scaleFromResizeDrag(resizeS, start, sw, sh, 0, 0.20*float64(ch))
+	want := clampScale(start + 0.20*float64(ch)/designH)
 	if math.Abs(got-want) > 1e-9 {
 		t.Fatalf("S +20%% height: got %v want %v", got, want)
 	}
 	// Corner: prefer the axis with the larger implied change.
-	got = scaleFromResizeDrag(resizeSE, start, sw, sh, 0.10*float64(sw), 0.30*float64(sh))
-	want = clampScale(start + 0.30*float64(sh)/designH)
+	got = scaleFromResizeDrag(resizeSE, start, sw, sh, 0.10*float64(cw), 0.30*float64(ch))
+	want = clampScale(start + 0.30*float64(ch)/designH)
 	if math.Abs(got-want) > 1e-9 {
 		t.Fatalf("SE mixed: got %v want %v (larger dy)", got, want)
 	}
@@ -170,6 +171,20 @@ func TestProductionSetButtonWinsOverResize(t *testing.T) {
 		cx, cy := set.X+set.W/2, set.Y+set.H/2
 		if got := hitResizeEdge(cx, cy, fx, fy, fw, fh, scale, set); got != resizeNone {
 			t.Fatalf("SET mid at scale %.2f is %s, want none", scale, got)
+		}
+	}
+}
+
+func TestFrameEdgeClearsNativeResizeInset(t *testing.T) {
+	pan := newApp().tank.Panel
+	fx, fy, fw, fh := pan.FrameBounds()
+	for _, scale := range []float64{minScale, defaultScale, maxScale} {
+		x, y, w, h := windowFrame(fx, fy, fw, fh, scale)
+		ww, wh := WindowSize(scale)
+		clearance := float64(nativeResizeInset + 1)
+		if x < clearance || y < clearance || float64(ww)-(x+w) < clearance || float64(wh)-(y+h) < clearance {
+			t.Fatalf("scale %.2f: frame (%.1f,%.1f %.1fx%.1f) is inside the %dpx native inset of window %dx%d",
+				scale, x, y, w, h, nativeResizeInset, ww, wh)
 		}
 	}
 }

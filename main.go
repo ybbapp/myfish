@@ -173,7 +173,7 @@ func (a *app) view(c *ui.Context) {
 			Font("monospace").FontSize(scaledFontSize(chompFontSize, scale)).Bold().
 			TextColor(colorChomp).TextStroke(scaledFontSize(1.1, scale), colorChompEdge).
 			Opacity(float32(fade)).
-			Absolute().Left(float32(ch.X * scale)).Top(float32(ch.Y * scale))
+			Absolute().Left(float32(dipX(ch.X, scale))).Top(float32(dipY(ch.Y, scale)))
 	}
 
 	hint := colorFeedHint
@@ -181,13 +181,13 @@ func (a *app) view(c *ui.Context) {
 		hint = colorFeedHintHot
 	}
 	feed := ui.Box(c).Key("feed-hit").
-		Absolute().Left(float32(pan.FX*scale)).Top(float32(pan.FY*scale)).
+		Absolute().Left(float32(dipX(pan.FX, scale))).Top(float32(dipY(pan.FY, scale))).
 		Size(float32(pan.FW*scale), float32(pan.FH*scale)).
 		Cursor(ui.CursorPointer).
 		HitTest(func(x, y float32, r ui.Rect) bool {
-			wx := float64(x) + pan.FX*scale
-			wy := float64(y) + pan.FY*scale
-			return hitResizeEdge(wx, wy, fx, fy, fw, fh, scale, setRect) == resizeNone
+			// HitTest x,y are in the same space as r (window DIPs), not
+			// 0-based local coordinates.
+			return hitResizeEdge(float64(x), float64(y), fx, fy, fw, fh, scale, setRect) == resizeNone
 		}).
 		HandleInput(func(ev ui.InputEvent) bool {
 			if a.clickThrough {
@@ -202,7 +202,7 @@ func (a *app) view(c *ui.Context) {
 				if ev.Button != 0 {
 					return false
 				}
-				a.pressX, a.pressY = ev.X+float32(pan.FX*scale), ev.Y+float32(pan.FY*scale)
+				a.pressX, a.pressY = ev.X+float32(dipX(pan.FX, scale)), ev.Y+float32(dipY(pan.FY, scale))
 				a.feeder.Down(now, x, y)
 				return true
 			case ui.InputPointerMove:
@@ -227,13 +227,13 @@ func (a *app) view(c *ui.Context) {
 	ui.Text(c, feedLabel).Key("feed-hint").
 		Font("monospace").FontSize(scaledFontSize(11, scale)).Bold().
 		TextColor(hint).
-		Absolute().Left(float32((pan.FX + pan.FW/2 - 16) * scale)).Top(float32((pan.FY + pan.FH*0.28) * scale))
+		Absolute().Left(float32(dipX(pan.FX+pan.FW/2-16, scale))).Top(float32(dipY(pan.FY+pan.FH*0.28, scale)))
 
 	// The stand is the drag area. Official DragWindow and SetPosition
 	// were both observed not to move this frameless window on Linux;
 	// the path is kept but not claimed to work.
 	stand := ui.Box(c).Key("drag").
-		Absolute().Left(float32(pan.BX*scale)).Top(float32(pan.BY*scale)).
+		Absolute().Left(float32(dipX(pan.BX, scale))).Top(float32(dipY(pan.BY, scale))).
 		Size(float32(pan.BW*scale), float32((pan.BH+pan.LegH)*scale)).
 		Cursor(ui.CursorMove).
 		HitTest(func(x, y float32, r ui.Rect) bool {
@@ -242,9 +242,7 @@ func (a *app) view(c *ui.Context) {
 				return false
 			}
 			// Edge/corner bands are the resize handles, not a move drag.
-			wx := float64(x) + pan.BX*scale
-			wy := float64(y) + pan.BY*scale
-			if hitResizeEdge(wx, wy, fx, fy, fw, fh, scale, setRect) != resizeNone {
+			if hitResizeEdge(float64(x), float64(y), fx, fy, fw, fh, scale, setRect) != resizeNone {
 				return false
 			}
 			return true
@@ -256,19 +254,23 @@ func (a *app) view(c *ui.Context) {
 	ui.Text(c, dragLabel).Key("drag-label").
 		Font("monospace").FontSize(scaledFontSize(handleFontSize, scale)).Bold().
 		TextColor(colorHandleMute).
-		Absolute().Left(float32((pan.BX + pan.BW/2 - 18) * scale)).Top(float32((pan.BY + pan.BH*0.35) * scale))
+		Absolute().Left(float32(dipX(pan.BX+pan.BW/2-18, scale))).Top(float32(dipY(pan.BY+pan.BH*0.35, scale)))
 
 	setW, setH := setRect.W, setRect.H
 	setX, setY := setRect.X, setRect.Y
 	rx, ry, rw, rh := resizeInputBounds(fx, fy, fw, fh, scale)
-	resize := ui.Box(c).Key("resize-hit").
+	resize := ui.Box(c).Key("resize-hit").Label("resize-hit").
 		Absolute().Left(float32(rx)).Top(float32(ry)).
 		Size(float32(rw), float32(rh)).
 		Cursor(cursorForResize(hoverEdge)).
 		HitTest(func(x, y float32, r ui.Rect) bool {
-			wx := float64(x) + float64(rx)
-			wy := float64(y) + float64(ry)
-			return hitResizeEdge(wx, wy, fx, fy, fw, fh, scale, setRect) != resizeNone
+			if a.resizing != resizeNone {
+				// Keep receiving moves if capture is lost after the
+				// pointer leaves the 8 DIP handle.
+				return true
+			}
+			// x,y are window DIPs (same space as r.X/r.Y), not local.
+			return hitResizeEdge(float64(x), float64(y), fx, fy, fw, fh, scale, setRect) != resizeNone
 		}).
 		HandleInput(a.onResizeInput)
 	_ = resize
@@ -322,8 +324,8 @@ func (a *app) setButtonRect(scale float64) rectWH {
 		setH = 16
 	}
 	return rectWH{
-		X: (pan.BX+pan.BW)*scale - setW,
-		Y: pan.BY*scale + 6*scale,
+		X: dipX(pan.BX+pan.BW, scale) - setW,
+		Y: dipY(pan.BY, scale) + 6*scale,
 		W: setW,
 		H: setH,
 	}
@@ -429,10 +431,7 @@ func (a *app) finishResize() {
 		return
 	}
 	a.resizing = resizeNone
-	if a.win != nil {
-		a.keepWindowOnScreen()
-		a.applyHitRegion()
-	}
+	a.applyTankScale()
 	a.persistSettings()
 }
 
@@ -479,6 +478,14 @@ func (a *app) ready() {
 		if !a.quitting && a.tray != nil && runtime.GOOS != "linux" {
 			e.PreventDefault()
 			a.win.Hide()
+			return
+		}
+		// On Linux a tray can be created even when the panel shows no
+		// icon. Closing the tank must quit; otherwise Alt+F4 hides or
+		// destroys the window and leaves the process (and the launching
+		// terminal) running with nothing to click.
+		if !a.quitting {
+			a.quit()
 		}
 	})
 	if dark, ok := tryThemeIsDark(); ok {
