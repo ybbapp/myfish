@@ -13,9 +13,15 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      macos_diagnostics:
+        description: Native macOS quit/scale diagnostics only (no packages/releases)
+        type: boolean
+        default: false
 
 jobs:
   macos:
+    if: github.event_name != 'workflow_dispatch' || !inputs.macos_diagnostics
     name: macOS ad-hoc sign and verify
     runs-on: macos-latest
     steps:
@@ -144,6 +150,7 @@ jobs:
           path: dist/macos
 
   windows:
+    if: github.event_name != 'workflow_dispatch' || !inputs.macos_diagnostics
     name: Windows Setup and install test
     runs-on: windows-latest
     steps:
@@ -292,3 +299,59 @@ jobs:
           name: windows-packages
           if-no-files-found: error
           path: dist/windows
+
+  macos-diagnostics:
+    if: github.event_name == 'workflow_dispatch' && inputs.macos_diagnostics
+    name: Native macOS diagnostics (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Core Text layout and raster regression (no native windows)
+        id: coretext
+        continue-on-error: true
+        shell: bash
+        env:
+          MYFISH_HEADLESS_EVIDENCE_DIR: ${{ github.workspace }}/acceptance/coretext-headless
+        run: |
+          mkdir -p acceptance
+          go test -count=1 -timeout=240s ./... 2>&1 | tee acceptance/coretext-tests.log
+          go vet ./... 2>&1 | tee acceptance/vet.log
+      - name: Build clean ordinary executable, then explicit diagnostic fixture
+        shell: bash
+        run: |
+          git rev-parse HEAD | tee acceptance/source-sha.txt
+          test -z "$(git status --porcelain)"
+          CGO_ENABLED=0 go build -trimpath -o acceptance/myfish-ordinary .
+          go version -m acceptance/myfish-ordinary > acceptance/ordinary-build-info.txt
+          python3 -c "from pathlib import Path; assert 'vcs.modified=false' in Path('acceptance/ordinary-build-info.txt').read_text()"
+          python3 tools/macos-diagnostics/inject.py
+          gofmt -w main.go look.go zz_mac_diagnostic.go
+          git diff > acceptance/instrumentation.patch
+          cp zz_mac_diagnostic.go acceptance/fixture-source.go.txt
+          CGO_ENABLED=0 go build -trimpath -o acceptance/myfish-fixture .
+          go version -m acceptance/myfish-fixture > acceptance/fixture-build-info.txt
+          shasum -a 256 acceptance/myfish-ordinary acceptance/myfish-fixture > acceptance/SHA256SUMS
+      - name: Exact-PID natural quit and native-view scale matrix
+        shell: bash
+        run: |
+          python3 tools/macos-diagnostics/run.py --ordinary acceptance/myfish-ordinary --fixture acceptance/myfish-fixture --output acceptance/native | tee acceptance/native-matrix.log
+      - name: Retain evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-native-diagnostics-${{ matrix.runner }}
+          path: acceptance
+          if-no-files-found: error
+      - name: Preserve failed Core Text test gate
+        if: always() && steps.coretext.outcome == 'failure'
+        run: exit 1

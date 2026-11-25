@@ -1,9 +1,10 @@
 # Open user acceptance defects (GM-1)
 
 These remain OPEN until the owner verifies both on their actual operating
-system. The owner requested continued tracking (t43u). Their OS, display DPI,
-and precise quit route have not yet been established. Never infer these from
-an attached machine identifier. A Linux check, vanished window, successful
+system. The owner requested continued tracking (t43u) and has now explicitly
+confirmed BOTH issues occur on macOS. Exact macOS version, display/backing scale
+and precise quit route remain unknown. Do not infer these from machine IDs.
+A Linux check, vanished window, successful
 compilation, or a CI liveness/forced-cleanup test is not final acceptance.
 
 ## EXIT-RESIDUE — OPEN (t41u)
@@ -15,7 +16,8 @@ Confirmed baseline source behavior (preview.7):
 - App.OnQuitCanceled did not reset the application's own quitting flag. The
   framework resets its flag, so a later main close could skip a new quit request.
 - These are real code defects/policies; neither is established as the precise
-  cause of this user's instance because OS/route/native evidence is missing.
+  cause of this user's instance because the exact Mac quit route/native evidence
+  remains missing. macOS itself is now confirmed by the owner.
 
 Local candidate: route main close through whole-application quit on all OSes;
 prepare settings/input state before all native/window/menu quit paths; allow
@@ -33,8 +35,12 @@ Evidence so far:
   required lifecycle/run-return events. The executor read the frozen verdict
   and lifecycle files; no files in that candidate were altered. Parent reports
   SET 35%/45% persistence and restoration to 75% passed. This is real Linux
-  native-loop evidence, not owner-platform acceptance or a test of this new
-  display follow-up binary. Tray unavailable (libayatana missing); CtrlQ untested.
+  native-loop evidence, not owner-Mac acceptance or a test of the display
+  follow-up binary. Later a1364f1 Linux computerUse evidence also verified
+  settings-open PID367123 and settings-hidden PID399239 natural Run return,
+  exit=0 and exact PID gone; scaling/edge/LIGHT/FEED/glass worked and sampled
+  adults remained inside glass. Actual growth/birth swelling was NOT exercised.
+  Tray unavailable (libayatana missing); CtrlQ untested.
 - Official-runner scripts require natural termination, exact child PID gone,
   exit=0 and `event=run-return`; not yet run for these local changes. Native
   macOS/Windows and keyboard CmdQ/Dock/tray interaction still need evidence.
@@ -60,7 +66,8 @@ That exact run exists in the juvenile stage table (e.g. Size=.53), but the image
 contains no fish ID/state or SET percentage. This pattern match does NOT prove
 the fish is a juvenile or invalidate the owner's report. The still screenshot
 cannot establish actual scale, DPI, installed version, dynamic-resize failure,
-or what particular shape the owner expected. No OS is inferred from the image.
+or what particular shape the owner expected. The owner separately confirmed
+macOS; this OS fact does not come from interpreting the image.
 
 Investigation and separate local follow-up:
 - The 35% minimum, font-size rounding/floor, weight cutoff and glow policy remain.

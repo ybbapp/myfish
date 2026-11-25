@@ -2,3 +2,6 @@
 /.mygo/
 mygo_windows_*.syso
 /dist/
+
+/acceptance/
+/tools/macos-diagnostics/__pycache__/

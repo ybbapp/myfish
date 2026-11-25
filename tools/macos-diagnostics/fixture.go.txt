@@ -1,0 +1,243 @@
+//go:build darwin
+
+// GENERATED ONLY in diagnostic CI checkout. Not included in production builds.
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/ebitengine/purego/objc"
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+	"mygo-desktop-fish/tank"
+)
+
+var macDiagFreeze bool
+var macBounds = map[string]map[string]any{}
+
+type macPoint struct{ X, Y float64 }
+type macRect struct{ X, Y, W, H float64 }
+
+func nsSel(s string) objc.SEL { return objc.RegisterName(s) }
+func nsApp() objc.ID          { return objc.ID(objc.GetClass("NSApplication")).Send(nsSel("sharedApplication")) }
+func nsString(s string) objc.ID {
+	return objc.ID(objc.GetClass("NSString")).Send(nsSel("stringWithUTF8String:"), s)
+}
+func writeMacJSON(name string, v any) {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	if err = os.WriteFile(filepath.Join(os.Getenv("MYFISH_DIAG_DIR"), name+".json"), append(b, '\n'), 0644); err != nil {
+		panic(err)
+	}
+}
+func macError(a *app, err error) {
+	log.Printf("MACDIAG FAIL %v", err)
+	writeMacJSON("failure", map[string]any{"error": err.Error()})
+	a.quit()
+}
+func recordMacFishBounds(key, s string, size float32, scale float64, r ui.Rect) {
+	if !strings.HasPrefix(key, "fish-") {
+		return
+	}
+	f := tankGlyphFont(size, scale)
+	w, h := ui.ShapeText(s, f, 0).Size()
+	macBounds[key] = map[string]any{"sprite": s, "font": f, "measured_width": w, "measured_height": h, "actual_node_rect": r, "app_scale": scale}
+}
+func macWindowReadout(a *app, step string) error {
+	win := objc.ID(a.win.NativeHandle())
+	view := win.Send(nsSel("contentView"))
+	bounds := objc.Send[macRect](view, nsSel("bounds"))
+	backing := objc.Send[macRect](view, nsSel("convertRectToBacking:"), bounds)
+	sf := objc.Send[float64](win, nsSel("backingScaleFactor"))
+	w, h := a.win.Size()
+	cw, ch := a.win.ContentSize()
+	wantW, wantH := WindowSize(a.settings.Scale)
+	id := int(win.Send(nsSel("windowNumber")))
+	info := map[string]any{"step": step, "pid": os.Getpid(), "window_number": id, "app_scale": a.settings.Scale, "window_size": []int{w, h}, "content_size": []int{cw, ch}, "native_content_points": bounds, "native_content_backing_pixels": backing, "backingScaleFactor": sf, "activationPolicy": int(nsApp().Send(nsSel("activationPolicy"))), "tray_present": a.tray != nil, "settings_open": a.settingsOpen, "fish": macBounds}
+	writeMacJSON(step, info)
+	if math.Abs(bounds.W-float64(wantW)) > 1 || math.Abs(bounds.H-float64(wantH)) > 1 {
+		return fmt.Errorf("native content points=%v want %dx%d", bounds, wantW, wantH)
+	}
+	if math.Abs(backing.W-bounds.W*sf) > 1 || math.Abs(backing.H-bounds.H*sf) > 1 {
+		return fmt.Errorf("point/backing conversion mismatch %v %v factor=%v", bounds, backing, sf)
+	}
+	return nil
+}
+func findMacQuit(menu objc.ID) (objc.ID, int, bool) {
+	n := int(menu.Send(nsSel("numberOfItems")))
+	for i := 0; i < n; i++ {
+		item := menu.Send(nsSel("itemAtIndex:"), i)
+		if uintptr(item.Send(nsSel("action"))) == uintptr(nsSel("terminate:")) {
+			return menu, i, true
+		}
+		if sub := item.Send(nsSel("submenu")); sub != 0 {
+			if m, j, ok := findMacQuit(sub); ok {
+				return m, j, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+func macQuitRoute(a *app, route string) error {
+	log.Printf("MACDIAG request route=%s pid=%d", route, os.Getpid())
+	switch route {
+	case "main-api":
+		a.win.Close()
+	case "delegate-close":
+		win := objc.ID(a.win.NativeHandle())
+		delegate := win.Send(nsSel("delegate"))
+		allowed := objc.Send[bool](delegate, nsSel("windowShouldClose:"), win)
+		log.Printf("MACDIAG native windowShouldClose returned=%v (main policy queues app-wide quit)", allowed)
+	case "appkit":
+		nsApp().Send(nsSel("terminate:"), objc.ID(0))
+	case "menu":
+		m, i, ok := findMacQuit(nsApp().Send(nsSel("mainMenu")))
+		if !ok {
+			return fmt.Errorf("no native terminate: menu item")
+		}
+		m.Send(nsSel("performActionForItemAtIndex:"), i)
+	case "cmdq-equivalent":
+		win := objc.ID(a.win.NativeHandle())
+		a.win.Focus()
+		event := objc.Send[objc.ID](objc.ID(objc.GetClass("NSEvent")), nsSel("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:"), uint64(10), macPoint{}, uint64(1<<20), float64(0), int64(win.Send(nsSel("windowNumber"))), objc.ID(0), nsString("q"), nsString("q"), false, uint16(12))
+		handled := objc.Send[bool](nsApp().Send(nsSel("mainMenu")), nsSel("performKeyEquivalent:"), event)
+		log.Printf("MACDIAG synthetic in-process CmdQ menu equivalent handled=%v (not physical keyboard)", handled)
+		if !handled {
+			return fmt.Errorf("native main menu did not handle CmdQ equivalent")
+		}
+	case "external": // Parent sends exact-PID NSRunningApplication terminate request.
+	default:
+		return fmt.Errorf("unknown route %q", route)
+	}
+	return nil
+}
+func startMacDiagnostics(a *app) {
+	route, state, _ := strings.Cut(os.Getenv("MYFISH_DIAG_CASE"), "/")
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		mygo.RunOnMain(func() {
+			if state != "never" {
+				a.openSettings()
+			}
+		})
+		time.Sleep(300 * time.Millisecond)
+		if state == "hidden" {
+			mygo.RunOnMain(func() { a.setWin.Close() })
+			time.Sleep(250 * time.Millisecond)
+			mygo.RunOnMain(func() {
+				if !a.win.IsVisible() || a.setWin == nil || a.setWin.IsDestroyed() || a.setWin.IsVisible() {
+					macError(a, fmt.Errorf("SET close did not hide only"))
+					return
+				}
+				// Reopen the same native settings window, then hide again.
+				a.openSettings()
+				a.setWin.Close()
+			})
+		}
+		if route == "scale" {
+			mygo.RunOnMain(func() {
+				macDiagFreeze = true
+				a.tank.Foods = nil
+				a.tank.Bubbles = nil
+				a.tank.Chomps = nil
+				a.tank.Fishes = a.tank.Fishes[:3]
+				f := &a.tank.Fishes[0]
+				f.Size = tank.MaxSize
+				f.Swell = tank.SwellPeak
+				f.State = tank.LifeBirthSwell
+				f.Facing = -1
+				f.X, f.Y = a.tank.Panel.ClampInside(1000, 1000, f.W(), f.H())
+				f = &a.tank.Fishes[1]
+				f.Size = .53
+				f.Swell = 1
+				f.State = tank.LifeSwim
+				f.Facing = 1
+				f.X = 220
+				f.Y = 80
+				f = &a.tank.Fishes[2]
+				f.Size = 1
+				f.Swell = 1
+				f.State = tank.LifeSwim
+				f.Facing = 1
+				f.X = a.tank.Panel.IX
+				f.Y = a.tank.Panel.IY + 120
+			})
+			for i, s := range []float64{.75, .35, 1.25, .55, .35, .75} {
+				step := fmt.Sprintf("scale-%02d-%.2f", i, s)
+				mygo.RunOnMain(func() { a.settings.Scale = s; a.applyTankScale(); macBounds = map[string]map[string]any{} })
+				time.Sleep(600 * time.Millisecond)
+				var err error
+				mygo.RunOnMain(func() {
+					err = macWindowReadout(a, step)
+					if err == nil {
+						err = checkMacFishBounds(a)
+					}
+				})
+				if err != nil {
+					mygo.RunOnMain(func() { macError(a, err) })
+					return
+				}
+				// CapturePage for Content is a software/content render, not WindowServer.
+				data, e := a.win.CapturePage()
+				if e != nil {
+					mygo.RunOnMain(func() { macError(a, e) })
+					return
+				}
+				if e = os.WriteFile(filepath.Join(os.Getenv("MYFISH_DIAG_DIR"), step+"-content-software.png"), data, 0644); e != nil {
+					panic(e)
+				}
+				writeMacJSON("capture-ready", map[string]any{"step": step})
+				// Runner independently tries screencapture -l using native window number.
+				deadline := time.Now().Add(10 * time.Second)
+				for {
+					if _, e := os.Stat(filepath.Join(os.Getenv("MYFISH_DIAG_DIR"), step+"-capture-done")); e == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						mygo.RunOnMain(func() { macError(a, fmt.Errorf("runner capture handshake timeout %s", step)) })
+						return
+					}
+					time.Sleep(50 * time.Millisecond)
+				}
+			}
+			mygo.RunOnMain(func() { a.quit() })
+			return
+		}
+		mygo.RunOnMain(func() {
+			if err := macWindowReadout(a, "ready"); err != nil {
+				macError(a, err)
+				return
+			}
+			if err := macQuitRoute(a, route); err != nil {
+				macError(a, err)
+			}
+		})
+	}()
+}
+func checkMacFishBounds(a *app) error {
+	if len(macBounds) != 3 {
+		return fmt.Errorf("native draw observations=%d want 3", len(macBounds))
+	}
+	p := a.tank.Panel
+	s := a.settings.Scale
+	pad := float64(glowStroke(s))
+	for key, info := range macBounds {
+		r := info["actual_node_rect"].(ui.Rect)
+		if float64(r.X)-pad < dipX(p.IX, s)-.05 || float64(r.Y)-pad < dipY(p.IY, s)-.05 || float64(r.X+r.W)+pad > dipX(p.IX+p.IW, s)+.05 || float64(r.Y+r.H)+pad > dipY(p.FloorY(), s)+.05 {
+			return fmt.Errorf("native node %s out of visual interior: %v", key, r)
+		}
+		if math.Abs(float64(r.W-info["measured_width"].(float32))) > 1.1 || math.Abs(float64(r.H-info["measured_height"].(float32))) > 1.1 {
+			return fmt.Errorf("native measure/draw mismatch %s %v", key, info)
+		}
+	}
+	return nil
+}
