@@ -168,7 +168,7 @@ func glowText(c *ui.Context, s, key string, size float32, fill, glow ui.Color, x
 	el := ui.Text(c, s).Key(key).
 		Font("monospace").FontSize(tankFontSize(float64(size), scale)).
 		TextColor(fill).TextStroke(glowStroke(scale), glow).
-		NoWrap().
+		PassThrough().NoWrap().
 		Absolute().Left(float32(dipX(x, scale))).Top(float32(dipY(y, scale)))
 	if tankTextBold(float64(size), scale) {
 		el.Bold()

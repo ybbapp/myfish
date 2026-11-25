@@ -111,7 +111,7 @@ func TestViewHoverDoesNotDropFood(t *testing.T) {
 	if !a.tank.Hovering {
 		t.Fatal("hover over the plate was not applied")
 	}
-	// Glass hover must stay approach-only even after the feed-strip dwell.
+	// Glass contact must stay non-feeding even after the feed-strip dwell.
 	tt.Advance(tank.HoverDwell + tank.HoverInterval)
 	tt.Frame()
 	if spawned := a.tank.FoodTrace().Spawned; spawned != 0 || len(a.tank.Foods) != 0 {
@@ -134,7 +134,7 @@ func TestViewFeedHoverDropsAfterDwell(t *testing.T) {
 		t.Fatal("entering the FEED strip dropped food immediately")
 	}
 	if a.tank.Hovering {
-		t.Fatal("FEED-strip hover should not start glass approach")
+		t.Fatal("FEED-strip hover should not start glass reactions")
 	}
 	tt.Advance(tank.HoverDwell - time.Millisecond)
 	tt.Frame()
@@ -172,7 +172,7 @@ func TestViewFeedHoverPassThroughDoesNotDrop(t *testing.T) {
 		t.Fatalf("a pass-through of the FEED strip dropped food: spawned=%d", a.tank.FoodTrace().Spawned)
 	}
 	if !a.tank.Hovering {
-		t.Fatal("after leaving FEED for the glass, approach hover should be on")
+		t.Fatal("after leaving FEED for the glass, glass contact should be on")
 	}
 }
 
@@ -564,5 +564,49 @@ func assertFishSpriteOneLine(t *testing.T, scale, size float64) {
 		if r.W < float32(font)*3 {
 			t.Errorf("scale %v size %v sprite %q width %.2f is too narrow for a 7-character fish (font %.2f)", scale, size, sprite, r.W, font)
 		}
+	}
+}
+
+func TestGlassReactionsUseDesignCoordinatesAtEveryScale(t *testing.T) {
+	for _, scale := range []float64{minScale, 0.55, defaultScale, maxScale} {
+		a := newApp()
+		a.settings.Scale = scale
+		a.tank.Foods = nil
+		x, y := 200.0, 230.0
+		tt := testView(a)
+		tt.Move(winXY(a, x, y))
+		tt.Advance(350 * time.Millisecond)
+		tt.Frame()
+		if !a.tank.Hovering || math.Abs(a.tank.HoverX-x) > 0.001 || math.Abs(a.tank.HoverY-y) > 0.001 {
+			t.Fatalf("scale %v lost design-space glass contact: %v,%v", scale, a.tank.HoverX, a.tank.HoverY)
+		}
+		if len(a.tank.Foods) != 0 || a.feeder.FeedHovering() {
+			t.Fatalf("scale %v glass contact accidentally started feeding", scale)
+		}
+		p := a.tank.Panel
+		tt.Move(winXY(a, p.FX+p.FW/2, p.FY+p.FH/2))
+		tt.Frame()
+		if a.tank.Hovering {
+			t.Fatalf("scale %v FEED still applying glass reaction", scale)
+		}
+		tt.Advance(tank.HoverDwell + time.Millisecond)
+		tt.Frame()
+		if len(a.tank.Foods) == 0 {
+			t.Fatalf("scale %v FEED dwell no longer feeds", scale)
+		}
+	}
+}
+
+func TestGlassContactThroughFishGlyphOverlay(t *testing.T) {
+	a := newApp()
+	a.tank.Foods = nil
+	f := a.tank.Fishes[0]
+	tt := testView(a)
+	// Inside the visible fish text, not just empty glass. Decorative text
+	// must not swallow pointer movement meant for the glass behind it.
+	tt.Move(winXY(a, f.X+18, f.Y+8))
+	tt.Frame()
+	if !a.tank.Hovering {
+		t.Fatal("fish text overlay blocked glass contact")
 	}
 }

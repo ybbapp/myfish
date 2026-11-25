@@ -134,8 +134,8 @@ func (a *app) view(c *ui.Context) {
 		return false
 	})
 	ptrDX, ptrDY := windowToDesign(float64(a.ptrX), float64(a.ptrY), scale)
-	// Glass hover stays approach-only: fish may turn toward the pointer,
-	// but SetHover never drops food.
+	// Glass contact uses each fish's temperament (observe or retreat).
+	// It is separate from the FEED strip and never drops food.
 	if a.ptrSeen && stage.Hovered() && pan.ContainsGlass(ptrDX, ptrDY) {
 		a.tank.SetHover(ptrDX, ptrDY)
 	} else if a.tank.Hovering && !(stage.Hovered() && pan.ContainsGlass(ptrDX, ptrDY)) {
@@ -178,7 +178,7 @@ func (a *app) view(c *ui.Context) {
 		chomp := ui.Text(c, ch.Text).Key(fmt.Sprintf("chomp-%d", ch.ID)).
 			Font("monospace").FontSize(tankFontSize(chompFontSize, scale)).
 			TextColor(colorChomp).TextStroke(scaledFontSize(1.1, scale), colorChompEdge).
-			NoWrap().
+			PassThrough().NoWrap().
 			Opacity(float32(fade)).
 			Absolute().Left(float32(dipX(ch.X, scale))).Top(float32(dipY(ch.Y, scale)))
 		if tankTextBold(chompFontSize, scale) {
@@ -294,7 +294,7 @@ func (a *app) view(c *ui.Context) {
 	ui.Text(c, feedLabel).Key("feed-hint").
 		Font("monospace").FontSize(controlFontSize(11, scale)).Bold().
 		TextColor(hint).
-		NoWrap().
+		PassThrough().NoWrap().
 		Absolute().Left(float32(dipX(pan.FX+pan.FW/2-16, scale))).Top(float32(dipY(pan.FY+pan.FH*0.28, scale)))
 
 	// The stand is the drag area. Official DragWindow and SetPosition

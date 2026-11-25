@@ -4,7 +4,7 @@
 # Windows: official MyGo NSIS Setup.exe, then install / start / uninstall
 #   on windows-latest (amd64). arm64 Setup is built but not installed here.
 # Artifacts are uploaded for a later preview release decision.
-# Windows amd64 also upgrades from the published preview.4 Setup and
+# Windows amd64 also upgrades from the published preview.6 Setup and
 # checks that %AppData%\小鱼缸\settings.json and the install path are kept.
 # This workflow does not create or overwrite GitHub Releases or tags.
 name: Packaging
@@ -59,6 +59,65 @@ jobs:
             fi
             echo "::endgroup::"
           done < /tmp/myfish-apps.txt
+      - name: Verify DMG, deployment targets and native startup
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance
+          hostarch="$(uname -m)"
+          case "$hostarch" in arm64) native=arm64 ;; x86_64) native=amd64 ;; *) exit 1 ;; esac
+          for arch in arm64 amd64; do
+            dmg="dist/macos/darwin-$arch/myfish-0.1.0-$arch.dmg"
+            hdiutil verify "$dmg" 2>&1 | tee "acceptance/dmg-$arch.log"
+            mount="$RUNNER_TEMP/myfish-dmg-$arch"
+            mkdir -p "$mount"
+            hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount"
+            app="$mount/小鱼缸.app"
+            exe="$app/Contents/MacOS/小鱼缸"
+            test -x "$exe"
+            codesign --verify --strict --deep --verbose=4 "$app"
+            plistmin=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")
+            otool -l "$exe" > "acceptance/macho-$arch.log"
+            binmin=$(awk '/LC_BUILD_VERSION/{v=1} v && /minos/{print $2; exit}' "acceptance/macho-$arch.log")
+            test "$plistmin" = "$binmin"
+            # Ad-hoc is expected to be rejected by Gatekeeper. Record, never
+            # disable policy or mistake this diagnostic for trusted signing.
+            set +e
+            spctl --assess --type execute --verbose=4 "$app" > "acceptance/spctl-$arch.log" 2>&1
+            policy=$?
+            set -e
+            echo "spctl_exit=$policy (diagnostic, ad-hoc is not Developer ID)" | tee -a "acceptance/spctl-$arch.log"
+            cat "acceptance/spctl-$arch.log"
+            if [ "$arch" = "$native" ]; then
+              copy="$RUNNER_TEMP/myfish-native/小鱼缸.app"
+              mkdir -p "$(dirname "$copy")"
+              ditto "$app" "$copy"
+              codesign --verify --strict --deep "$copy"
+              "$copy/Contents/MacOS/小鱼缸" > acceptance/native-start.log 2>&1 &
+              apppid=$!
+              # A bounded liveness smoke check, not UI/Gatekeeper acceptance.
+              for tick in 1 2 3 4 5; do
+                sleep 1
+                if ! kill -0 "$apppid" 2>/dev/null; then
+                  wait "$apppid" || rc=$?
+                  cat acceptance/native-start.log
+                  echo "native app exited early, status=${rc:-0}" >&2
+                  exit 1
+                fi
+              done
+              echo "host=$hostarch native=$native pid=$apppid alive for 5 seconds" | tee -a acceptance/native-start.log
+              kill -TERM "$apppid"
+              wait "$apppid" || true
+            fi
+            hdiutil detach "$mount"
+          done
+      - name: Upload macOS acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-acceptance
+          path: acceptance
+          if-no-files-found: warn
       - name: Upload macOS packages
         uses: actions/upload-artifact@v4
         with:
@@ -109,7 +168,18 @@ jobs:
           Write-Host "amd64=$($amd.FullName) size=$($amd.Length)"
           Write-Host "arm64=$($arm.FullName) size=$($arm.Length)"
           "SETUP_AMD64=$($amd.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Upgrade preview.4, start, and uninstall amd64 Setup
+      - name: Record Authenticode and PE identities
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force acceptance | Out-Null
+          $signatures = Get-ChildItem -Recurse dist/windows -Filter '*.exe' | ForEach-Object {
+            $sig = Get-AuthenticodeSignature -LiteralPath $_.FullName
+            [PSCustomObject]@{ File = $_.FullName; SignatureStatus = "$($sig.Status)"; SHA256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
+          }
+          $signatures | ConvertTo-Json | Tee-Object -FilePath acceptance/signatures.json
+          Write-Host 'Unsigned is expected: this is not a SmartScreen acceptance test.'
+      - name: Upgrade preview.6, start, and uninstall amd64 Setup
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -120,14 +190,14 @@ jobs:
           $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\小鱼缸.lnk'
           $dataDir = Join-Path $env:APPDATA '小鱼缸'
           $settings = Join-Path $dataDir 'settings.json'
-          $prev = Join-Path $env:RUNNER_TEMP 'myfish-setup-0.1.0-preview.4-amd64.exe'
-          $prevUrl = 'https://github.com/ybbapp/myfish/releases/download/v0.1.0-preview.4/myfish-setup-0.1.0-amd64.exe'
-          Write-Host "Downloading preview.4 Setup from $prevUrl"
+          $prev = Join-Path $env:RUNNER_TEMP 'myfish-setup-0.1.0-preview.6-amd64.exe'
+          $prevUrl = 'https://github.com/ybbapp/myfish/releases/download/v0.1.0-preview.6/myfish-setup-0.1.0-amd64.exe'
+          Write-Host "Downloading preview.6 Setup from $prevUrl"
           Invoke-WebRequest -Uri $prevUrl -OutFile $prev -UseBasicParsing
-          Write-Host "Installing preview.4 silently"
+          Write-Host "Installing preview.6 silently"
           $old = Start-Process -FilePath $prev -ArgumentList '/S' -Wait -PassThru
-          if ($old.ExitCode -ne 0) { throw "preview.4 installer exit $($old.ExitCode)" }
-          if (-not (Test-Path -LiteralPath $exe)) { throw "preview.4 app not installed at $exe" }
+          if ($old.ExitCode -ne 0) { throw "preview.6 installer exit $($old.ExitCode)" }
+          if (-not (Test-Path -LiteralPath $exe)) { throw "preview.6 app not installed at $exe" }
           New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
           $json = '{"mode":"dark","opacity":0.6,"highlight":0.82,"scale":1.1}'
           [System.IO.File]::WriteAllText($settings, $json)
@@ -139,8 +209,8 @@ jobs:
             if ([math]::Abs([double]$got.highlight - 0.82) -gt 1e-6) { throw "highlight not preserved ${when}: $($got.highlight)" }
             if ([math]::Abs([double]$got.scale - 1.1) -gt 1e-6) { throw "scale not preserved ${when}: $($got.scale)" }
           }
-          Assert-Settings 'after writing preview.4 settings'
-          Write-Host "Installing new Setup over preview.4: $setup"
+          Assert-Settings 'after writing preview.6 settings'
+          Write-Host "Installing new Setup over preview.6: $setup"
           $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "upgrade installer exit $($p.ExitCode)" }
           if (-not (Test-Path -LiteralPath $exe)) { throw "app missing at $exe after upgrade" }
@@ -154,6 +224,17 @@ jobs:
           $auto = @()
           if (Test-Path $startup) { $auto = Get-ChildItem $startup -Filter '*鱼*' -ErrorAction SilentlyContinue }
           if ($auto.Count -gt 0) { throw "unexpected startup shortcut: $($auto.Name)" }
+          $uninstallEntries = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.UninstallString -like '*MyFish*' })
+          if ($uninstallEntries.Count -eq 0) { throw 'missing per-user uninstall registration' }
+          $uninstallEntries | Select-Object DisplayName, DisplayVersion, UninstallString | ConvertTo-Json | Out-File acceptance/uninstall-registration.json
+          foreach ($key in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Run', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run')) {
+            $run = Get-ItemProperty $key -ErrorAction SilentlyContinue
+            if ($run) {
+              foreach ($value in $run.PSObject.Properties) {
+                if ("$($value.Value)" -match 'MyFish|小鱼缸') { throw "unexpected autostart entry: $($value.Name)" }
+              }
+            }
+          }
           Assert-Settings 'after upgrade to new Setup'
           Write-Host "Starting upgraded app briefly"
           $proc = Start-Process -FilePath $exe -PassThru
@@ -170,8 +251,15 @@ jobs:
           if (Test-Path -LiteralPath $exe) { throw "app still present after uninstall" }
           if (Test-Path -LiteralPath $startMenu) { throw "Start menu shortcut still present after uninstall" }
           Assert-Settings 'after uninstall (user data must remain)'
-          Write-Host "amd64 preview.4 upgrade, start, uninstall (settings kept) passed"
+          Write-Host "amd64 preview.6 upgrade, start, uninstall (settings kept) passed"
           Write-Host "arm64 Setup was built but not executed on this amd64 runner"
+      - name: Upload Windows acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-acceptance
+          path: acceptance
+          if-no-files-found: warn
       - name: Upload Windows packages
         uses: actions/upload-artifact@v4
         with:

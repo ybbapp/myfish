@@ -60,6 +60,8 @@ type Fish struct {
 	SlideToX, SlideToY     float64
 	SpeedVar               float64
 	Tint                   int
+	GlassReaction          GlassReaction // stable per-fish temperament, not re-rolled per frame
+	glassRecovery          float64
 	lotteryCD              float64
 }
 
@@ -177,14 +179,15 @@ func New(w, h float64, seed int64) *Tank {
 		x, y := t.Panel.RandomPoint(s[0], s[1], 8)
 		x, y = t.Panel.ClampInside(x-fishW/2, y-fishH/2, fishW, fishH)
 		t.Fishes = append(t.Fishes, Fish{
-			ID:       t.nextID,
-			X:        x,
-			Y:        y,
-			Facing:   s[2],
-			Size:     StartSize,
-			Swell:    1,
-			SpeedVar: 1,
-			Tint:     (t.nextID - 1) % 3,
+			ID:            t.nextID,
+			X:             x,
+			Y:             y,
+			Facing:        s[2],
+			Size:          StartSize,
+			Swell:         1,
+			SpeedVar:      1,
+			Tint:          (t.nextID - 1) % 3,
+			GlassReaction: initialGlassReaction(seed, len(t.Fishes)),
 		})
 		t.pickWanderTarget(len(t.Fishes) - 1)
 	}
@@ -286,29 +289,13 @@ func (t *Tank) stepFish(i int, dt float64, foodIdx int) {
 		} else if fx > f.X+f.W()/2+4 {
 			f.Facing = 1
 		}
-	} else if t.Hovering && t.nearestHover() == i {
-		speed = hoverSpeed * f.SpeedScale()
-		cx, cy := f.Center()
-		dx, dy := t.HoverX-cx, t.HoverY-cy
-		dist := math.Hypot(dx, dy)
-		if dist > hoverStand {
-			// Ease toward the pointer but stop at a standoff; never jump.
-			f.TargetX = cx + dx*(dist-hoverStand)/dist
-			f.TargetY = cy + dy*(dist-hoverStand)/dist
-		} else {
-			f.TargetX, f.TargetY = cx, cy
-		}
+	} else if t.Hovering {
+		speed = t.glassTarget(f)
+		f.glassRecovery = 0.65
 	} else {
 		f.Retarget -= dt
 		if f.Retarget <= 0 {
 			t.pickWanderTarget(i)
-		}
-	}
-	if t.Hovering && !chasing {
-		if t.HoverX < f.X+f.W()/2-8 {
-			f.Facing = -1
-		} else if t.HoverX > f.X+f.W()/2+8 {
-			f.Facing = 1
 		}
 	}
 	originX, originY := f.Center()
@@ -318,19 +305,34 @@ func (t *Tank) stepFish(i int, dt float64, foodIdx int) {
 	dx := f.TargetX - originX
 	dy := f.TargetY - originY
 	dist := math.Hypot(dx, dy)
+	wantVX, wantVY := 0.0, 0.0
 	if dist > 1 {
-		f.VX = dx / dist * speed
-		f.VY = dy / dist * speed
-		f.X += f.VX * dt
-		f.Y += f.VY * dt
-	} else {
-		f.VX, f.VY = 0, 0
+		wantVX, wantVY = dx/dist*speed, dy/dist*speed
 	}
-	if math.Abs(f.VX) > 6 && !t.Hovering && !chasing {
-		if f.VX > 0 {
-			f.Facing = 1
-		} else {
-			f.Facing = -1
+	if !chasing && (t.Hovering || f.glassRecovery > 0) {
+		// A real-time exponential blend makes entry/exit gentle and stable
+		// across frame rates without changing normal food-chasing physics.
+		blend := 1 - math.Exp(-dt/0.22)
+		f.VX += (wantVX - f.VX) * blend
+		f.VY += (wantVY - f.VY) * blend
+		if !t.Hovering {
+			f.glassRecovery = math.Max(0, f.glassRecovery-dt)
+		}
+	} else {
+		f.VX, f.VY = wantVX, wantVY
+	}
+	f.X += f.VX * dt
+	f.Y += f.VY * dt
+	if !chasing {
+		if t.Hovering && f.GlassReaction != GlassShy {
+			// Curious fish watch the contact even when holding still.
+			if t.HoverX < f.X+f.W()/2-8 {
+				f.Facing = -1
+			} else if t.HoverX > f.X+f.W()/2+8 {
+				f.Facing = 1
+			}
+		} else if math.Abs(f.VX) > 6 {
+			f.Facing = math.Copysign(1, f.VX)
 		}
 	}
 	t.clampFish(i)
@@ -546,7 +548,8 @@ func (t *Tank) placeFood(x, y float64) bool {
 	return true
 }
 
-// SetHover records a restrained pointer interaction on the plate.
+// SetHover records glass contact in design coordinates. Each fish keeps its
+// own stable curious/shy reaction; lifecycle animations and eating take priority.
 // It never drops food.
 func (t *Tank) SetHover(x, y float64) {
 	t.Hovering = true
@@ -560,7 +563,9 @@ func (t *Tank) ClearHover() {
 	}
 	t.Hovering = false
 	for i := range t.Fishes {
-		t.pickWanderTarget(i)
+		if !t.Fishes[i].busy() && !t.Fishes[i].Emerging {
+			t.pickWanderTarget(i)
+		}
 	}
 }
 

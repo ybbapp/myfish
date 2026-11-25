@@ -348,21 +348,22 @@ func (t *Tank) spawnNewbornFrom(parent int) bool {
 	tint := (adult.Tint + 1) % 3
 	speed := 0.92 + t.rng.Float64()*0.16
 	baby := Fish{
-		ID:         t.nextID,
-		X:          fromX,
-		Y:          fromY,
-		Facing:     adult.Facing,
-		Size:       NewbornSize,
-		Swell:      1,
-		State:      LifeSwim,
-		Emerging:   true,
-		ParentID:   adult.ID,
-		SlideFromX: fromX,
-		SlideFromY: fromY,
-		SlideToX:   toX,
-		SlideToY:   toY,
-		SpeedVar:   speed,
-		Tint:       tint,
+		ID:            t.nextID,
+		X:             fromX,
+		Y:             fromY,
+		Facing:        adult.Facing,
+		Size:          NewbornSize,
+		Swell:         1,
+		State:         LifeSwim,
+		Emerging:      true,
+		ParentID:      adult.ID,
+		SlideFromX:    fromX,
+		SlideFromY:    fromY,
+		SlideToX:      toX,
+		SlideToY:      toY,
+		SpeedVar:      speed,
+		Tint:          tint,
+		GlassReaction: initialGlassReaction(int64(adult.ID), t.nextID),
 	}
 	t.Fishes = append(t.Fishes, baby)
 	t.clampFish(len(t.Fishes) - 1)
