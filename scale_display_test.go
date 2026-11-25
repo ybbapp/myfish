@@ -21,7 +21,11 @@ func TestDisplayDynamicResizeAndDPIKeepsWholeSprite(t *testing.T) {
 				a.tank.Fishes = a.tank.Fishes[:1]
 				f := &a.tank.Fishes[0]
 				f.Size, f.Swell, f.Facing, f.X, f.Y = body, 1, -1, 100, 140
-				tt := testView(a)
+				// Fresh and reused Testers have different clock origins;
+				// do not advance one shared fish while comparing layout.
+				view := func(c *ui.Context) { a.last = c.Now(); a.view(c) }
+				w, h := WindowSize(a.settings.Scale)
+				tt := ui.NewTester(view, w, h)
 				tt.SetScale(dpi)
 				for _, scale := range []float64{1.25, 0.75, 0.55, 0.35, 0.55, 0.35, 0.75, 1.25} {
 					a.settings.Scale = scale
@@ -43,7 +47,7 @@ func TestDisplayDynamicResizeAndDPIKeepsWholeSprite(t *testing.T) {
 						f.Facing = face
 						tt.Frame()
 						r, ok = tt.Find(f.Sprite())
-						fresh := ui.NewTester(a.view, w, h)
+						fresh := ui.NewTester(view, w, h)
 						fresh.SetScale(dpi)
 						want, found := fresh.Find(f.Sprite())
 						if !ok || !found || math.Abs(float64(r.W-want.W)) > 1.1 || math.Abs(float64(r.H-want.H)) > 1.1 {
@@ -56,7 +60,7 @@ func TestDisplayDynamicResizeAndDPIKeepsWholeSprite(t *testing.T) {
 	}
 }
 
-func TestDisplayMeasureGrowthVersusCollisionDiagnostic(t *testing.T) {
+func TestDisplayGrowthVersusCollisionContainment(t *testing.T) {
 	// Record the known visual/collision mismatch for investigation. Do not
 	// claim that a single small sprite in a screenshot is necessarily a bug:
 	// juvenile Sprite() intentionally progresses from o to partial strings.
@@ -74,6 +78,9 @@ func TestDisplayMeasureGrowthVersusCollisionDiagnostic(t *testing.T) {
 			t.Fatal("missing max/swell sprite")
 		}
 		right := dipX(a.tank.Panel.IX+a.tank.Panel.IW, scale)
-		t.Logf("scale=%.2f sprite=%q font=%.2f measured=%v physics=%.2fx%.2f visual-right-overrun=%.2f DIP (diagnostic; user-platform issue remains OPEN)", scale, f.Sprite(), tankFontSize(fishFontSize*f.VisualScale(), scale), r, f.W()*scale, f.H()*scale, float64(r.X+r.W)-right)
+		if float64(r.X+r.W) > right+0.01 {
+			t.Fatal("grown/swelled run escaped visual containment")
+		}
+		t.Logf("scale=%.2f sprite=%q font=%.2f measured=%v physics=%.2fx%.2f visual-right-overrun=%.2f DIP (contained render; user-platform issue remains OPEN)", scale, f.Sprite(), tankFontSize(fishFontSize*f.VisualScale(), scale), r, f.W()*scale, f.H()*scale, float64(r.X+r.W)-right)
 	}
 }

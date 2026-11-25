@@ -166,7 +166,8 @@ func (a *app) view(c *ui.Context) {
 		fill, glow := fishColors(fish.Tint)
 		alpha := fish.Opacity()
 		size := float32(float64(fishFontSize) * fish.VisualScale())
-		glowText(c, sprite, fmt.Sprintf("fish-%d", fish.ID), size, withAlpha(fill, alpha), withAlpha(glow, alpha), fish.X, fish.Y, scale)
+		x, y := fishTextPosition(sprite, size, fish.X, fish.Y, scale, pan)
+		glowText(c, sprite, fmt.Sprintf("fish-%d", fish.ID), size, withAlpha(fill, alpha), withAlpha(glow, alpha), x, y, scale)
 	}
 	for _, ch := range a.tank.Chomps {
 		fade := 1 - ch.Age/ch.Life

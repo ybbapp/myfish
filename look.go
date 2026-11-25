@@ -165,14 +165,12 @@ func withAlpha(c ui.Color, a float64) ui.Color {
 }
 
 func glowText(c *ui.Context, s, key string, size float32, fill, glow ui.Color, x, y, scale float64) {
-	el := ui.Text(c, s).Key(key).
-		Font("monospace").FontSize(tankFontSize(float64(size), scale)).
+	font := tankGlyphFont(size, scale)
+	ui.Text(c, s).Key(key).
+		Font(font.Family).FontSize(font.Size).FontWeight(font.Weight).
 		TextColor(fill).TextStroke(glowStroke(scale), glow).
 		PassThrough().NoWrap().
 		Absolute().Left(float32(dipX(x, scale))).Top(float32(dipY(y, scale)))
-	if tankTextBold(float64(size), scale) {
-		el.Bold()
-	}
 }
 
 func drawResizeHint(p *ui.Painter, fx, fy, fw, fh, scale float64, edge resizeEdge) {
