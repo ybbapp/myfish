@@ -106,8 +106,26 @@ jobs:
                 fi
               done
               echo "host=$hostarch native=$native pid=$apppid alive for 5 seconds" | tee -a acceptance/native-start.log
-              kill -TERM "$apppid"
-              wait "$apppid" || true
+              # Ask exactly this host-native app to quit through AppKit's
+              # normal termination request. No TERM/KILL counts as acceptance.
+              MYFISH_QUIT_PID="$apppid" osascript -l JavaScript -e '
+                ObjC.import("AppKit");
+                var pid = Number(ObjC.unwrap($.NSProcessInfo.processInfo.environment.objectForKey("MYFISH_QUIT_PID")));
+                var target = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);
+                if (!target || !target.terminate) throw new Error("native quit request rejected for pid=" + pid);
+              ' 2>&1 | tee acceptance/native-quit-request.log
+              for tick in {1..20}; do
+                if ! kill -0 "$apppid" 2>/dev/null; then break; fi
+                sleep 0.5
+              done
+              if kill -0 "$apppid" 2>/dev/null; then
+                echo "FAIL: native quit left exact pid=$apppid alive; no forced stop is a pass" >&2
+                cat acceptance/native-start.log
+                exit 1
+              fi
+              wait "$apppid"
+              grep -q "pid=$apppid event=run-return" acceptance/native-start.log
+              echo "host=$hostarch pid=$apppid native termination request, exit=0 and App.Run return verified (not browser Gatekeeper or keyboard CmdQ/Dock acceptance)" | tee -a acceptance/native-start.log
             fi
             hdiutil detach "$mount"
           done
@@ -179,7 +197,7 @@ jobs:
           }
           $signatures | ConvertTo-Json | Tee-Object -FilePath acceptance/signatures.json
           Write-Host 'Unsigned is expected: this is not a SmartScreen acceptance test.'
-      - name: Upgrade preview.6, start, and uninstall amd64 Setup
+      - name: Upgrade preview.6, start, naturally quit, and uninstall amd64 Setup
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -236,14 +254,22 @@ jobs:
             }
           }
           Assert-Settings 'after upgrade to new Setup'
-          Write-Host "Starting upgraded app briefly"
-          $proc = Start-Process -FilePath $exe -PassThru
+          Write-Host "Starting upgraded app; test natural main-window close, not forced cleanup"
+          $stderr = Join-Path (Get-Location) 'acceptance/native-lifecycle.log'
+          $stdout = Join-Path (Get-Location) 'acceptance/native-stdout.log'
+          $proc = Start-Process -FilePath $exe -PassThru -RedirectStandardError $stderr -RedirectStandardOutput $stdout
           Start-Sleep -Seconds 8
           $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
           if (-not $alive) { throw "process exited early (code $($proc.ExitCode))" }
-          Stop-Process -Id $proc.Id -Force
-          Start-Sleep -Seconds 2
-          Assert-Settings 'after starting the upgraded app'
+          $proc.Refresh()
+          if (-not $proc.CloseMainWindow()) { throw "no main window accepted WM_CLOSE for pid=$($proc.Id)" }
+          if (-not $proc.WaitForExit(10000)) { throw "natural main close left exact pid=$($proc.Id) alive; forced stop is not a pass" }
+          $proc.Refresh()
+          if ($proc.ExitCode -ne 0) { throw "natural quit exit=$($proc.ExitCode) pid=$($proc.Id)" }
+          $log = Get-Content -LiteralPath $stderr -Raw -Encoding utf8
+          if ($log -notmatch "pid=$($proc.Id) event=run-return") { throw 'App.Run did not return normally (possible framework fallback)' }
+          Write-Host "Native WM_CLOSE: exact pid=$($proc.Id) exited=0 and App.Run returned"
+          Assert-Settings 'after natural quit of the upgraded app'
           Write-Host "Uninstalling silently"
           $u = Start-Process -FilePath $unins -ArgumentList '/S' -Wait -PassThru
           if ($u.ExitCode -ne 0) { throw "uninstaller exit $($u.ExitCode)" }

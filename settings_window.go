@@ -128,6 +128,7 @@ func (a *app) onSettingsClosed() {
 }
 
 func (a *app) closeSettings() {
+	a.settingsOpen = false
 	if a.setWin != nil {
 		dbg("closeSettings Hide() settingsOpen=%v", a.settingsOpen)
 		a.setWin.Hide()

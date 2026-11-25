@@ -12,7 +12,6 @@ import (
 	"image/draw"
 	"image/png"
 	"log"
-	"runtime"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -42,6 +41,7 @@ type app struct {
 	alwaysOnTop      bool
 	clickThrough     bool
 	quitting         bool
+	quitApp          func() // production App.Quit, replaceable in policy tests
 	shortcutsOn      bool
 	feeder           *tank.Feeder
 	settings         Settings
@@ -70,6 +70,7 @@ func newApp() *app {
 		tank:          tank.New(designW, designH, 7),
 		alwaysOnTop:   true,
 		feeder:        tank.NewFeeder(),
+		quitApp:       mygo.App.Quit,
 		settings:      s,
 		lastMode:      s.Mode,
 		lastOpacity:   s.Opacity,
@@ -584,27 +585,7 @@ func (a *app) ready() {
 		Content:           ui.View(a.view),
 	})
 	a.debugWindowState("main window created")
-	a.win.OnClose(func(e *mygo.CloseEvent) {
-		dbg("main OnClose enter quitting=%v tray=%v goos=%s setWin=%s", a.quitting, a.tray != nil, runtime.GOOS, debugSetWinState(a))
-		a.debugWindowState("main OnClose")
-		if !a.quitting && a.tray != nil && runtime.GOOS != "linux" {
-			e.PreventDefault()
-			a.win.Hide()
-			dbg("main OnClose hid window (non-linux tray), preventDefault")
-			return
-		}
-		// On Linux a tray can be created even when the panel shows no
-		// icon. Closing the tank must quit; otherwise Alt+F4 hides or
-		// destroys the window and leaves the process (and the launching
-		// terminal) running with nothing to click.
-		if !a.quitting {
-			dbg("main OnClose calling quit()")
-			a.quit()
-			dbg("main OnClose quit() returned prevented=%v", e.DefaultPrevented())
-		} else {
-			dbg("main OnClose skipped quit; already quitting prevented=%v", e.DefaultPrevented())
-		}
-	})
+	a.win.OnClose(a.onMainClose)
 	a.win.OnClosed(func() {
 		dbg("main OnClosed destroyed=%v", a.win != nil && a.win.IsDestroyed())
 		a.debugWindowState("main OnClosed")
@@ -761,20 +742,6 @@ func (a *app) toggleClickThrough() {
 	a.setClickThrough(true)
 }
 
-func (a *app) quit() {
-	dbg("quit() enter setWin=%s", debugSetWinState(a))
-	a.debugWindowState("quit enter")
-	a.quitting = true
-	if a.setWin != nil {
-		dbg("quit() closing settings window destroyed=%v", a.setWin.IsDestroyed())
-		a.setWin.Close()
-		dbg("quit() settings Close() returned setWin=%s", debugSetWinState(a))
-	}
-	dbg("quit() calling App.Quit()")
-	mygo.App.Quit()
-	dbg("quit() App.Quit() returned")
-}
-
 func trayIcon() []byte {
 	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
 	stand := color.NRGBA{R: 164, G: 222, B: 214, A: 255}
@@ -795,21 +762,16 @@ func main() {
 	a := newApp()
 	mygo.App.SetName("小鱼缸")
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
-	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
-		dbg("App.OnBeforeQuit sessionEnding=%v alreadyAppQuittingFlag=%v", e.SessionEnding, a.quitting)
-		a.quitting = true
-	})
+	mygo.App.OnBeforeQuit(a.onBeforeQuit)
 	mygo.App.OnWillQuit(func(e *mygo.QuitEvent) {
-		dbg("App.OnWillQuit sessionEnding=%v preventable, currently prevented=%v setWin=%s", e.SessionEnding, e.DefaultPrevented(), debugSetWinState(a))
+		lifecycle("will-quit", "sessionEnding=%v prevented=%v", e.SessionEnding, e.DefaultPrevented())
 	})
-	mygo.App.OnQuitCanceled(func() {
-		dbg("App.OnQuitCanceled — quit sequence was canceled")
-		a.debugWindowState("OnQuitCanceled")
-	})
+	mygo.App.OnQuitCanceled(a.onQuitCanceled)
+	mygo.App.OnQuit(func() { lifecycle("quit-complete", "framework OnQuit reached; require normal run-return") })
 	mygo.App.WhenReady(a.ready)
-	dbg("App.Run starting")
+	lifecycle("run-start", "native event loop starting")
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
-	dbg("App.Run returned")
+	lifecycle("run-return", "native event loop returned normally")
 }

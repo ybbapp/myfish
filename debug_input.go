@@ -121,6 +121,9 @@ func (a *app) debugWindowState(tag string) {
 }
 
 func debugSetWinState(a *app) string {
+	if !debugInput {
+		return "debug-disabled"
+	}
 	if a.setWin == nil {
 		return "nil"
 	}
